@@ -11,12 +11,38 @@ datasource db {
 }
 
 model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
-  password     String
-  discordToken String?  @map("discord_token")
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id               String   @id @default(uuid())
+  clerkUserId      String   @unique @map("clerk_user_id")
+  email            String?
+  discordToken      String?  @map("discord_token")
+  selectedGuildId   String?  @map("selected_guild_id")
+  selectedGuildName String?  @map("selected_guild_name")
+
+  // Agent configuration
+  personality       String?  @default("") @map("personality")
+  rules             String?  @default("") @map("rules")
+  information       String?  @default("") @map("information")
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Agent stats
+  lastMessageSentAt     DateTime? @map("last_message_sent_at")
+  lastMessageReceivedAt DateTime? @map("last_message_received_at")
+  messagesSentCount     Int       @default(0) @map("messages_sent_count")
+  messagesReceivedCount Int       @default(0) @map("messages_received_count")
 
   @@map("users")
+}
+
+model PendingDiscordToken {
+  id              String   @id @default(uuid())
+  discordToken    String   @map("discord_token")
+  claimCode       String   @unique @map("claim_code")
+  expiresAt       DateTime @map("expires_at")
+  claimed         Boolean  @default(false)
+  claimedByUserId String?  @map("claimed_by_user_id")
+  createdAt       DateTime @default(now())
+
+  @@map("pending_discord_tokens")
 }

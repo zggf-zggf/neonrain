@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NeonRain</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <h1>NeonRain</h1>
+
+    <!-- Initial State: Capture Button -->
+    <div id="capture-section">
+      <p class="description">Capture your Discord token to connect to NeonRain.</p>
+      <button id="capture-btn" class="btn btn-primary">
+        Capture Discord Token
+      </button>
+      <div id="status" class="status hidden"></div>
+    </div>
+
+    <!-- Success State: Show Claim Code -->
+    <div id="code-section" class="hidden">
+      <h2>Your Claim Code</h2>
+      <div id="claim-code" class="code"></div>
+      <p class="description">Enter this code on the NeonRain website to link your Discord account.</p>
+      <p class="expires">Code expires in <span id="countdown">10:00</span></p>
+      <a href="http://localhost:3001/claim" target="_blank" class="btn btn-secondary">
+        Go to Website
+      </a>
+      <button id="copy-btn" class="btn btn-outline">
+        Copy Code
+      </button>
+    </div>
+
+    <!-- Error State -->
+    <div id="error-section" class="hidden">
+      <p id="error-message" class="error"></p>
+      <button id="retry-btn" class="btn btn-secondary">
+        Try Again
+      </button>
+    </div>
+
+    <div class="footer">
+      <a href="http://localhost:3001" target="_blank">Visit NeonRain Dashboard</a>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

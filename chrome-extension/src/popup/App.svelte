@@ -16,6 +16,19 @@
   let connectingDiscord = false;
   let discordStatusMessage = '';
   let successMessage = '';
+  let guilds = [];
+  let selectedGuildId = null;
+  let channels = [];
+  let selectedChannels = new Map(); // Map channelId -> {channelId, guildId}
+  let savedChannels = []; // Array of {channelId, guildId}
+  let configuringChannels = false;
+  let loadingGuilds = false;
+  let loadingChannels = false;
+  let savingChannels = false;
+  let configuringPrompt = false;
+  let prompt = '';
+  let savedPrompt = '';
+  let savingPrompt = false;
 
   // Check backend health
   async function checkBackendHealth() {
@@ -65,10 +78,273 @@
       if (response.ok) {
         const data = await response.json();
         discordConnected = data.connected;
+
+        if (discordConnected) {
+          await loadSavedChannels();
+          await loadSavedPrompt();
+        }
+      } else if (response.status === 401) {
+        // Session expired, force logout
+        chrome.storage.local.remove(['authToken', 'userEmail'], () => {
+          isLoggedIn = false;
+          userEmail = '';
+        });
       }
     } catch (err) {
       console.error('Failed to check Discord status:', err);
     }
+  }
+
+  async function loadSavedChannels() {
+    const authToken = await getAuthToken();
+    if (!authToken) return;
+
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/discord/channels`, {
+        headers: {
+          'Authorization': `Bearer ${authToken}`
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        savedChannels = data.channels || [];
+        // Populate selectedChannels Map from saved data
+        selectedChannels = new Map();
+        savedChannels.forEach(ch => {
+          selectedChannels.set(ch.channelId, ch);
+        });
+      }
+    } catch (err) {
+      console.error('Failed to load saved channels:', err);
+    }
+  }
+
+  async function loadSavedPrompt() {
+    const authToken = await getAuthToken();
+    if (!authToken) return;
+
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/discord/prompt`, {
+        headers: {
+          'Authorization': `Bearer ${authToken}`
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        savedPrompt = data.prompt || '';
+        prompt = savedPrompt;
+      }
+    } catch (err) {
+      console.error('Failed to load saved prompt:', err);
+    }
+  }
+
+  async function savePrompt() {
+    savingPrompt = true;
+    error = '';
+    successMessage = '';
+
+    const authToken = await getAuthToken();
+    if (!authToken) {
+      error = 'Not authenticated';
+      savingPrompt = false;
+      return;
+    }
+
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/discord/prompt`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`
+        },
+        body: JSON.stringify({ prompt })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        savedPrompt = data.prompt;
+        successMessage = 'Prompt saved successfully!';
+        configuringPrompt = false;
+        setTimeout(() => {
+          successMessage = '';
+        }, 3000);
+      } else {
+        const data = await response.json();
+        error = data.error || 'Failed to save prompt';
+      }
+    } catch (err) {
+      console.error('Failed to save prompt:', err);
+      error = 'Cannot connect to backend';
+    } finally {
+      savingPrompt = false;
+    }
+  }
+
+  function startConfiguringPrompt() {
+    configuringPrompt = true;
+    prompt = savedPrompt;
+  }
+
+  function cancelPromptConfiguration() {
+    configuringPrompt = false;
+    prompt = savedPrompt;
+    error = '';
+  }
+
+  async function fetchGuilds() {
+    loadingGuilds = true;
+    error = '';
+
+    const authToken = await getAuthToken();
+    if (!authToken) {
+      error = 'Not authenticated';
+      loadingGuilds = false;
+      return;
+    }
+
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/discord/guilds`, {
+        headers: {
+          'Authorization': `Bearer ${authToken}`
+        }
+      });
+
+      if (response.ok) {
+        guilds = await response.json();
+      } else {
+        const data = await response.json();
+        error = data.error || 'Failed to fetch Discord guilds.';
+      }
+    } catch (err) {
+      console.error('Failed to fetch guilds:', err);
+      error = 'Cannot connect to backend. Make sure it is running.';
+    } finally {
+      loadingGuilds = false;
+    }
+  }
+
+  async function fetchChannels(guildId) {
+    // If clicking the same guild, collapse it
+    if (selectedGuildId === guildId) {
+      selectedGuildId = null;
+      channels = [];
+      return;
+    }
+
+    // Set guild as selected immediately to show loading state
+    selectedGuildId = guildId;
+    loadingChannels = true;
+    error = '';
+    channels = []; // Clear previous channels
+
+    const authToken = await getAuthToken();
+    if (!authToken) {
+      error = 'Not authenticated';
+      loadingChannels = false;
+      return;
+    }
+
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/discord/guilds/${guildId}/channels`, {
+        headers: {
+          'Authorization': `Bearer ${authToken}`
+        }
+      });
+
+      if (response.ok) {
+        channels = await response.json();
+      } else {
+        const data = await response.json();
+        error = data.error || 'Failed to fetch channels for this guild.';
+      }
+    } catch (err) {
+      console.error('Failed to fetch channels:', err);
+      error = 'Cannot connect to backend.';
+    } finally {
+      loadingChannels = false;
+    }
+  }
+
+  async function saveChannelSelection() {
+    savingChannels = true;
+    error = '';
+    successMessage = '';
+
+    const authToken = await getAuthToken();
+    if (!authToken) {
+      error = 'Not authenticated';
+      savingChannels = false;
+      return;
+    }
+
+    try {
+      // Convert Map to array of {channelId, guildId} objects
+      const channelsToSave = Array.from(selectedChannels.values());
+
+      const response = await fetch(`${BACKEND_URL}/api/discord/channels`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          channels: channelsToSave
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        savedChannels = data.channels || [];
+        successMessage = `Successfully saved ${savedChannels.length} channel(s)!`;
+        configuringChannels = false;
+
+        setTimeout(() => {
+          successMessage = '';
+        }, 3000);
+      } else {
+        const data = await response.json();
+        error = data.error || 'Failed to save channel selection';
+      }
+    } catch (err) {
+      console.error('Failed to save channels:', err);
+      error = 'Cannot connect to backend.';
+    } finally {
+      savingChannels = false;
+    }
+  }
+
+  function toggleChannelSelection(channelId, guildId) {
+    if (selectedChannels.has(channelId)) {
+      selectedChannels.delete(channelId);
+    } else {
+      selectedChannels.set(channelId, { channelId, guildId });
+    }
+    selectedChannels = selectedChannels; // Trigger reactivity
+  }
+
+  async function startConfiguringChannels() {
+    configuringChannels = true;
+    await fetchGuilds();
+  }
+
+  function cancelConfiguration() {
+    configuringChannels = false;
+    guilds = [];
+    channels = [];
+    selectedGuildId = null;
+    // Restore from saved
+    selectedChannels = new Map();
+    savedChannels.forEach(ch => {
+      selectedChannels.set(ch.channelId, ch);
+    });
+    error = '';
+  }
+
+  function guildHasSelectedChannels(guildId) {
+    return savedChannels.some(ch => ch.guildId === guildId);
   }
 
   async function getAuthToken() {
@@ -123,7 +399,17 @@
       } else {
         const data = await response.json();
         console.error('[Discord Connect] Backend error:', data);
-        error = `Backend error: ${data.error || 'Failed to connect Discord'}`;
+
+        // If 401, clear auth and force re-login
+        if (response.status === 401) {
+          chrome.storage.local.remove(['authToken', 'userEmail'], () => {
+            isLoggedIn = false;
+            userEmail = '';
+            error = 'Session expired. Please login again.';
+          });
+        } else {
+          error = `Backend error: ${data.error || 'Failed to connect Discord'}`;
+        }
         connectingDiscord = false;
         discordStatusMessage = '';
       }
@@ -324,9 +610,12 @@ If this still doesn't work, check the Console for errors.`;
           <div class="success">{successMessage}</div>
         {/if}
 
-        {#if discordConnected}
-          <p class="discord-status connected">✓ Discord Connected</p>
-        {:else}
+        {#if error}
+          <div class="error">{error}</div>
+        {/if}
+
+        {#if !discordConnected}
+          <!-- State 1: No Discord Token -->
           <p class="discord-status">Not connected</p>
 
           {#if discordStatusMessage}
@@ -341,6 +630,130 @@ If this still doesn't work, check the Console for errors.`;
             {connectingDiscord ? 'Connecting...' : 'Connect Discord'}
           </button>
           <p class="hint">Open Discord first, then click Connect</p>
+
+        {:else if configuringChannels}
+          <!-- State 2: Token Present, Configuring Channels -->
+          <p class="discord-status connected">✓ Discord Connected</p>
+
+          {#if loadingGuilds}
+            <p class="loading">Loading guilds...</p>
+          {:else if guilds.length > 0}
+            <div class="guilds-list">
+              <h4>Select Channels to Monitor</h4>
+
+              {#each guilds as guild}
+                <div class="guild-item">
+                  <button
+                    class="guild-button"
+                    class:active={selectedGuildId === guild.id}
+                    on:click={() => fetchChannels(guild.id)}
+                  >
+                    <span class="guild-name-text">{guild.name}</span>
+                    {#if guildHasSelectedChannels(guild.id)}
+                      <span class="guild-indicator"></span>
+                    {/if}
+                  </button>
+
+                  {#if selectedGuildId === guild.id}
+                    {#if loadingChannels}
+                      <p class="loading-channels">Loading channels...</p>
+                    {:else if channels.length > 0}
+                      <div class="channels-list">
+                        {#each channels as channel}
+                          <label class="channel-item">
+                            <span class="channel-name">#{channel.name}</span>
+                            <input
+                              type="checkbox"
+                              checked={selectedChannels.has(channel.id)}
+                              on:change={() => toggleChannelSelection(channel.id, selectedGuildId)}
+                            />
+                          </label>
+                        {/each}
+                      </div>
+                    {/if}
+                  {/if}
+                </div>
+              {/each}
+
+              <div class="config-actions">
+                <button
+                  class="btn btn-primary"
+                  on:click={saveChannelSelection}
+                  disabled={savingChannels || selectedChannels.size === 0}
+                >
+                  {savingChannels ? 'Saving...' : `Save (${selectedChannels.size} selected)`}
+                </button>
+                <button
+                  class="btn btn-secondary"
+                  on:click={cancelConfiguration}
+                  disabled={savingChannels}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          {/if}
+
+        {:else if savedChannels.length > 0}
+          <!-- State 3: Token + Channels Selected -->
+          <p class="discord-status connected">✓ Discord Connected</p>
+          <p class="channels-summary">
+            Monitoring <strong>{savedChannels.length}</strong> channel{savedChannels.length !== 1 ? 's' : ''}
+          </p>
+
+          {#if configuringPrompt}
+            <!-- Prompt Configuration UI -->
+            <div class="prompt-config">
+              <label for="prompt-input">Enter your prompt:</label>
+              <textarea
+                id="prompt-input"
+                bind:value={prompt}
+                placeholder="Enter instructions for processing Discord messages..."
+                rows="6"
+              />
+              <div class="button-group">
+                <button
+                  class="btn btn-primary"
+                  on:click={savePrompt}
+                  disabled={savingPrompt}
+                >
+                  {savingPrompt ? 'Saving...' : 'Save Prompt'}
+                </button>
+                <button
+                  class="btn btn-secondary"
+                  on:click={cancelPromptConfiguration}
+                  disabled={savingPrompt}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          {:else}
+            <button
+              class="btn btn-primary"
+              on:click={startConfiguringChannels}
+            >
+              Configure Channels
+            </button>
+            <button
+              class="btn btn-primary"
+              on:click={startConfiguringPrompt}
+              style="margin-top: 8px;"
+            >
+              Configure Prompt
+            </button>
+          {/if}
+
+        {:else}
+          <!-- State 2b: Token Present, No Channels Selected Yet -->
+          <p class="discord-status connected">✓ Discord Connected</p>
+          <p class="discord-status">No channels configured yet</p>
+          <button
+            class="btn btn-primary"
+            on:click={startConfiguringChannels}
+          >
+            Select Channels
+          </button>
         {/if}
       </div>
 
@@ -394,6 +807,8 @@ If this still doesn't work, check the Console for errors.`;
 <style>
   .container {
     padding: 20px;
+    width: 350px;
+    box-sizing: border-box;
   }
 
   h2 {
@@ -599,6 +1014,177 @@ If this still doesn't work, check the Console for errors.`;
     margin-top: 10px;
     font-size: 11px;
     color: #888;
+  }
+
+  .loading {
+    color: #666;
+    font-size: 13px;
+    margin: 10px 0;
+  }
+
+  .guilds-list {
+    margin-top: 15px;
+    text-align: left;
+  }
+
+  .guilds-list h4 {
+    margin: 0 0 10px 0;
+    font-size: 14px;
+    color: #555;
+    text-align: center;
+  }
+
+  .guild-item {
+    margin-bottom: 10px;
+  }
+
+  .guild-button {
+    width: 100%;
+    padding: 10px;
+    background-color: #fff;
+    border: 2px solid #ddd;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-align: left;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .guild-button:hover {
+    border-color: #4CAF50;
+    background-color: #f9f9f9;
+  }
+
+  .guild-button.active {
+    border-color: #4CAF50;
+    background-color: #e8f5e9;
+    color: #2e7d32;
+  }
+
+  .guild-name-text {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .guild-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: #4CAF50;
+    flex-shrink: 0;
+    box-shadow: 0 0 3px rgba(76, 175, 80, 0.6);
+  }
+
+  .loading-channels {
+    font-size: 12px;
+    color: #666;
+    margin: 5px 0 0 15px;
+  }
+
+  .channels-list {
+    margin: 10px 0 0 15px;
+    max-height: 200px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    border-left: 2px solid #e0e0e0;
+    padding-left: 10px;
+    padding-right: 5px;
+  }
+
+  .channel-item {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 8px;
+    margin: 2px 0;
+    cursor: pointer;
+    border-radius: 3px;
+    transition: background-color 0.2s;
+  }
+
+  .channel-item:hover {
+    background-color: #f5f5f5;
+  }
+
+  .channel-item input[type="checkbox"] {
+    cursor: pointer;
+    margin: 0;
+  }
+
+  .channel-name {
+    font-size: 12px;
+    color: #555;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .config-actions {
+    margin-top: 15px;
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+  }
+
+  .config-actions .btn {
+    flex: 1;
+  }
+
+  .channels-summary {
+    margin: 15px 0;
+    font-size: 14px;
+    color: #555;
+  }
+
+  .channels-summary strong {
+    color: #4CAF50;
+  }
+
+  .prompt-config {
+    margin-top: 15px;
+  }
+
+  .prompt-config label {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #333;
+  }
+
+  .prompt-config textarea {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 13px;
+    font-family: inherit;
+    resize: vertical;
+    box-sizing: border-box;
+  }
+
+  .prompt-config textarea:focus {
+    outline: none;
+    border-color: #4CAF50;
+  }
+
+  .button-group {
+    display: flex;
+    gap: 10px;
+    margin-top: 10px;
+  }
+
+  .button-group .btn {
+    flex: 1;
   }
 
   @keyframes pulse {

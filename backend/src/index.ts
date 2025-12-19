@@ -1,7 +1,8 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
-import authRoutes from './routes/auth.js';
+import { clerkMiddleware } from '@clerk/express';
 import discordRoutes from './routes/discord.js';
+import { prisma } from './lib/prisma.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -10,8 +11,24 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+// Clerk middleware - must be before routes that use auth
+app.use(clerkMiddleware());
+
+// Request logging middleware (exclude noisy polling endpoints)
+app.use((req, res, next) => {
+  // Skip logging for frequently polled endpoints to reduce noise
+  if (req.path === '/api/discord/tokens' || req.path === '/health') {
+    return next();
+  }
+
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+  if (req.headers.authorization) {
+    console.log(`  Auth: ${req.headers.authorization.substring(0, 20)}...`);
+  }
+  next();
+});
+
 // Routes
-app.use('/api/auth', authRoutes);
 app.use('/api/discord', discordRoutes);
 
 // Health check endpoint
@@ -44,6 +61,23 @@ app.get('/api/test', (req: Request, res: Response) => {
     }
   });
 });
+
+// Cleanup expired pending tokens every 5 minutes
+setInterval(async () => {
+  try {
+    const deleted = await prisma.pendingDiscordToken.deleteMany({
+      where: {
+        expiresAt: { lt: new Date() },
+        claimed: false
+      }
+    });
+    if (deleted.count > 0) {
+      console.log(`[Cleanup] Deleted ${deleted.count} expired pending tokens`);
+    }
+  } catch (error) {
+    console.error('[Cleanup] Error deleting expired tokens:', error);
+  }
+}, 5 * 60 * 1000);
 
 // Start server
 app.listen(PORT, () => {
