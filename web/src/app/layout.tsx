@@ -1,12 +1,11 @@
 import type { Metadata } from "next";
 import {
   ClerkProvider,
-  SignInButton,
-  SignUpButton,
   SignedIn,
   SignedOut,
   UserButton,
 } from "@clerk/nextjs";
+import Link from "next/link";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -30,16 +29,18 @@ export default function RootLayout({
               </a>
               <div className="flex items-center gap-4">
                 <SignedOut>
-                  <SignInButton mode="modal">
-                    <button className="px-4 py-2 text-sm text-gray-300 hover:text-white transition">
-                      Sign In
-                    </button>
-                  </SignInButton>
-                  <SignUpButton mode="modal">
-                    <button className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition">
-                      Get Started
-                    </button>
-                  </SignUpButton>
+                  <Link
+                    href="/sign-in"
+                    className="px-4 py-2 text-sm text-gray-300 hover:text-white transition"
+                  >
+                    Sign In
+                  </Link>
+                  <Link
+                    href="/sign-up"
+                    className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition"
+                  >
+                    Get Started
+                  </Link>
                 </SignedOut>
                 <SignedIn>
                   <a

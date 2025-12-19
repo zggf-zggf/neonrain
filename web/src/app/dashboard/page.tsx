@@ -1,6 +1,6 @@
 "use client";
 
-import { useAuth } from "@clerk/nextjs";
+import { useAuth, useUser } from "@clerk/nextjs";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
@@ -45,7 +45,8 @@ function formatTimeAgo(dateString: string | null): string {
 }
 
 export default function DashboardPage() {
-  const { getToken } = useAuth();
+  const { getToken, isLoaded: isAuthLoaded } = useAuth();
+  const { isLoaded: isUserLoaded } = useUser();
   const [loading, setLoading] = useState(true);
   const [discordConnected, setDiscordConnected] = useState(false);
   const [selectedGuild, setSelectedGuild] = useState<SelectedGuild | null>(null);
@@ -66,8 +67,11 @@ export default function DashboardPage() {
   const [savingServer, setSavingServer] = useState(false);
 
   useEffect(() => {
-    loadData();
-  }, []);
+    // Wait for Clerk to be fully loaded before fetching data
+    if (isAuthLoaded && isUserLoaded) {
+      loadData();
+    }
+  }, [isAuthLoaded, isUserLoaded]);
 
   async function loadData() {
     try {
@@ -197,7 +201,7 @@ export default function DashboardPage() {
     setGuilds([]);
   }
 
-  if (loading) {
+  if (loading || !isAuthLoaded || !isUserLoaded) {
     return (
       <div className="max-w-4xl mx-auto px-6 py-12">
         <div className="text-center text-gray-400">Loading...</div>

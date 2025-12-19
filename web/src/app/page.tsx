@@ -1,4 +1,4 @@
-import { SignUpButton, SignedIn, SignedOut } from "@clerk/nextjs";
+import { SignedIn, SignedOut } from "@clerk/nextjs";
 import Link from "next/link";
 
 export default function Home() {
@@ -15,11 +15,12 @@ export default function Home() {
         </p>
 
         <SignedOut>
-          <SignUpButton mode="modal">
-            <button className="px-8 py-4 text-lg bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition font-medium">
-              Get Started Free
-            </button>
-          </SignUpButton>
+          <Link
+            href="/sign-up"
+            className="inline-block px-8 py-4 text-lg bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition font-medium"
+          >
+            Get Started Free
+          </Link>
         </SignedOut>
 
         <SignedIn>
