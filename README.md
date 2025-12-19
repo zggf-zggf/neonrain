@@ -2,71 +2,24 @@
 
 AI-powered Discord bot that responds to messages using HUMA (Human-like AI). Users connect their Discord account via a Chrome extension, configure their bot's personality, and let it chat in their selected server.
 
-## Architecture
-
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│ Chrome Extension│     │   Next.js Web   │     │  Go Discord     │
-│ (Token Capture) │     │   (Dashboard)   │     │    Client       │
-└────────┬────────┘     └────────┬────────┘     └────────┬────────┘
-         │                       │                       │
-         │    Claim Code         │    Clerk Auth         │    HUMA AI
-         └───────────┬───────────┴───────────┬───────────┘
-                     │                       │
-              ┌──────┴──────┐         ┌──────┴──────┐
-              │   Backend   │         │  PostgreSQL │
-              │  (Express)  ├─────────┤             │
-              └─────────────┘         └─────────────┘
-```
-
-## Components
-
-- **Chrome Extension** - Captures Discord token from discord.com and generates a claim code
-- **Web Dashboard** - Next.js app with Clerk auth for managing bot settings
-- **Backend API** - Express server handling auth, tokens, and configuration
-- **Discord Client** - Go service that connects to Discord and integrates with HUMA AI
-- **PostgreSQL** - Database for users, tokens, and settings
-
-## Local Development Setup
+## Quick Start (Local Development)
 
 ### Prerequisites
 
 - Docker & Docker Compose
-- Node.js 18+ (for local development without Docker)
-- Go 1.21+ (for local development without Docker)
+- Chrome browser (for the extension)
+- A Discord account
 
-### Quick Start (Docker)
+### 1. Clone and Setup
 
 ```bash
-# Clone the repo
 git clone https://github.com/zggf-zggf/neonrain.git
 cd neonrain
-
-# Create environment files
-cp backend/.env.example backend/.env
-cp web/.env.local.example web/.env.local
-
-# Start all services
-cd backend
-docker compose up -d
-
-# Run database migrations
-docker compose exec backend npx prisma migrate deploy
-
-# Check status
-docker compose ps
 ```
 
-Services will be available at:
-- **Web Dashboard**: http://localhost:3001
-- **Backend API**: http://localhost:3000
-- **Discord Client API**: http://localhost:8080
-- **PostgreSQL**: localhost:5432
+### 2. Create Environment Files
 
-### Environment Variables
-
-#### backend/.env
-
+**backend/.env**
 ```env
 DATABASE_URL="postgresql://postgres:postgres@postgres:5432/neonrain?schema=public"
 PORT=3000
@@ -74,182 +27,375 @@ NODE_ENV=development
 INTERNAL_API_KEY="secure-internal-key-change-me"
 GO_SERVICE_URL="http://discord-client:8080"
 
-# Clerk Authentication (test keys)
+# Clerk Authentication (test keys - shared for dev)
 CLERK_PUBLISHABLE_KEY=pk_test_dmVyaWZpZWQtbXVsZS0xMy5jbGVyay5hY2NvdW50cy5kZXYk
 CLERK_SECRET_KEY=sk_test_FmI60UCnBPxvPHM700Z5cJj03o1fRRmUbmAElgzMRd
 
-# HUMA API Key
+# HUMA API Key (shared for dev)
 HUMA_API_KEY=ak_gVBqFtMwZms8LiolP-dYZERfN04NiG_ZCe-M7U9MtKw
 ```
 
-#### web/.env.local
-
+**web/.env.local**
 ```env
-# Clerk Authentication
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_dmVyaWZpZWQtbXVsZS0xMy5jbGVyay5hY2NvdW50cy5kZXYk
 CLERK_SECRET_KEY=sk_test_FmI60UCnBPxvPHM700Z5cJj03o1fRRmUbmAElgzMRd
-
-# Clerk redirect URLs
 NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
 NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
 NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL=/dashboard
 NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL=/dashboard
-
-# Backend API URL
 NEXT_PUBLIC_BACKEND_URL=http://localhost:3000
 ```
 
-### Chrome Extension Setup
-
-1. Open Chrome and go to `chrome://extensions/`
-2. Enable "Developer mode" (top right)
-3. Click "Load unpacked"
-4. Select the `chrome-extension` folder
-5. Go to discord.com and click the extension icon
-6. Click "Capture Token" to get a claim code
-7. Enter the claim code in the web dashboard at http://localhost:3001/claim
-
-### Common Commands
-
-```bash
-# Start all services
-cd backend && docker compose up -d
-
-# View logs
-docker compose logs -f
-
-# View specific service logs
-docker compose logs -f discord-client
-
-# Restart a service
-docker compose restart discord-client
-
-# Stop all services
-docker compose down
-
-# Rebuild after code changes
-docker compose build --no-cache && docker compose up -d
-
-# Run migrations
-docker compose exec backend npx prisma migrate deploy
-
-# Access database
-docker compose exec postgres psql -U postgres -d neonrain
-```
-
-### Development Without Docker
-
-#### Backend
+### 3. Start Services
 
 ```bash
 cd backend
+docker compose up -d
+docker compose exec backend npx prisma migrate deploy
+```
+
+Wait for all services to be healthy:
+```bash
+docker compose ps
+```
+
+You should see:
+```
+NAME                      STATUS
+neonrain-postgres         healthy
+neonrain-backend          healthy
+neonrain-discord-client   healthy
+neonrain-web              running
+```
+
+### 4. Install Chrome Extension
+
+1. Open Chrome → `chrome://extensions/`
+2. Enable **Developer mode** (top right toggle)
+3. Click **Load unpacked**
+4. Select the `chrome-extension` folder from this repo
+5. Pin the extension for easy access
+
+### 5. Services URLs
+
+| Service | URL | Description |
+|---------|-----|-------------|
+| Web Dashboard | http://localhost:3001 | User interface |
+| Backend API | http://localhost:3000 | REST API |
+| Discord Client | http://localhost:8080 | Go service (internal) |
+| PostgreSQL | localhost:5432 | Database |
+
+---
+
+## User Flow (How It Works)
+
+### Step 1: Create Account
+1. Go to http://localhost:3001
+2. Click **Sign Up**
+3. Create account with email (uses Clerk auth)
+4. You'll be redirected to the dashboard
+
+### Step 2: Connect Discord
+1. Open https://discord.com in Chrome and **log in** to your Discord account
+2. Click the **NeonRain extension** icon in Chrome toolbar
+3. Click **Capture Discord Token**
+4. You'll get a **6-character claim code** (e.g., `A3B7K9`)
+5. Go back to dashboard → Click **Claim Discord Token**
+6. Enter the claim code
+7. Dashboard now shows "Discord Connected"
+
+### Step 3: Select Server
+1. In dashboard, click **Select Server**
+2. Choose which Discord server the bot should monitor
+3. The bot will listen to ALL text channels in that server
+
+### Step 4: Configure AI Personality
+In the **Agent Configuration** section, set:
+
+- **Personality**: How the AI should behave
+  ```
+  Friendly and casual. Uses humor. Likes to help with coding questions.
+  ```
+
+- **Rules**: What the AI should/shouldn't do
+  ```
+  Never discuss politics. Keep responses under 200 words. Don't spam.
+  ```
+
+- **Information**: Context the AI should know
+  ```
+  This is a gaming community. Main games: Minecraft, Valorant.
+  Server owner is @AdminUser.
+  ```
+
+Click **Save Configuration**
+
+### Step 5: Test It
+1. Go to your Discord server (the one you selected)
+2. Send a message in any text channel
+3. The bot (using your account) will read it and may respond
+4. Check the **Agent Statistics** in dashboard to see activity
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         USER FLOW                                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌──────────────┐    Claim Code    ┌──────────────┐             │
+│  │   Chrome     │ ──────────────── │   Next.js    │             │
+│  │  Extension   │                  │  Dashboard   │             │
+│  │              │                  │ :3001        │             │
+│  │ Captures     │                  │              │             │
+│  │ Discord      │                  │ - Sign up    │             │
+│  │ Token        │                  │ - Claim token│             │
+│  └──────────────┘                  │ - Configure  │             │
+│         │                          │   AI         │             │
+│         │                          └──────┬───────┘             │
+│         │                                 │                      │
+│         │ POST /submit-token              │ Clerk Auth           │
+│         │                                 │                      │
+│         ▼                                 ▼                      │
+│  ┌────────────────────────────────────────────────┐             │
+│  │              Express Backend :3000              │             │
+│  │                                                 │             │
+│  │  - /api/discord/submit-token (get claim code)  │             │
+│  │  - /api/discord/claim-token (link to account)  │             │
+│  │  - /api/discord/config (personality/rules)     │             │
+│  │  - /api/discord/tokens (internal, for Go)      │             │
+│  └─────────────────────┬──────────────────────────┘             │
+│                        │                                         │
+│                        │ Prisma ORM                              │
+│                        ▼                                         │
+│  ┌─────────────────────────────────────────────────┐            │
+│  │              PostgreSQL :5432                    │            │
+│  │                                                  │            │
+│  │  users: id, discord_token, personality, rules   │            │
+│  │  pending_tokens: claim_code, discord_token      │            │
+│  └─────────────────────────────────────────────────┘            │
+│                        ▲                                         │
+│                        │ Polls /api/discord/tokens               │
+│                        │                                         │
+│  ┌─────────────────────┴───────────────────────────┐            │
+│  │           Go Discord Client :8080                │            │
+│  │                                                  │            │
+│  │  - Connects to Discord as user                  │            │
+│  │  - Listens to messages in selected server       │            │
+│  │  - Sends messages to HUMA AI                    │            │
+│  │  - Types & sends responses                      │            │
+│  └─────────────────────┬───────────────────────────┘            │
+│                        │                                         │
+│                        │ WebSocket                               │
+│                        ▼                                         │
+│  ┌─────────────────────────────────────────────────┐            │
+│  │              HUMA AI (External)                  │            │
+│  │              api.humalike.tech                   │            │
+│  │                                                  │            │
+│  │  - Receives message context                     │            │
+│  │  - Generates human-like responses               │            │
+│  │  - Calls send_message tool                      │            │
+│  └─────────────────────────────────────────────────┘            │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Development Commands
+
+### Docker Commands
+
+```bash
+# Start everything
+cd backend && docker compose up -d
+
+# View all logs
+docker compose logs -f
+
+# View specific service
+docker compose logs -f discord-client
+docker compose logs -f backend
+docker compose logs -f web
+
+# Restart after code changes
+docker compose build --no-cache && docker compose up -d
+
+# Restart single service
+docker compose restart discord-client
+
+# Stop everything
+docker compose down
+
+# Stop and delete data
+docker compose down -v
+```
+
+### Database Commands
+
+```bash
+# Run migrations
+docker compose exec backend npx prisma migrate deploy
+
+# Create new migration
+docker compose exec backend npx prisma migrate dev --name your_migration_name
+
+# Access database directly
+docker compose exec postgres psql -U postgres -d neonrain
+
+# Useful SQL queries
+SELECT * FROM users;
+SELECT * FROM pending_discord_tokens;
+```
+
+### Local Development (without Docker)
+
+If you want to run services locally for faster iteration:
+
+**Backend:**
+```bash
+cd backend
 npm install
+# Set DATABASE_URL to localhost:5432 in .env
 npx prisma generate
 npx prisma migrate dev
 npm run dev
 ```
 
-#### Web
-
+**Web:**
 ```bash
 cd web
 npm install
 npm run dev
 ```
 
-#### Discord Client
-
+**Discord Client:**
 ```bash
 cd discord-user-client
 go mod download
+# Set BACKEND_URL=http://localhost:3000 in environment
 go run cmd/discord-client/main.go
 ```
 
-## Configuration
-
-### Agent Configuration (via Dashboard)
-
-- **Personality** - Character traits and communication style
-- **Rules** - Behavioral guidelines and restrictions
-- **Information** - Context and knowledge for the AI to reference
-
-### How It Works
-
-1. User installs Chrome extension and captures their Discord token
-2. User claims the token in the web dashboard using a 6-character code
-3. User selects which Discord server to monitor
-4. User configures the AI personality, rules, and information
-5. The Go client connects to Discord using the user's token
-6. When messages are received, they're sent to HUMA AI
-7. HUMA generates responses based on the configuration
-8. Responses are sent back to Discord with typing simulation
+---
 
 ## Project Structure
 
 ```
 neonrain/
-├── backend/                 # Express API server
+│
+├── backend/                      # Express.js API
 │   ├── src/
-│   │   ├── routes/         # API endpoints
-│   │   ├── middleware/     # Clerk auth middleware
-│   │   └── lib/            # Database client
-│   ├── prisma/             # Database schema & migrations
-│   └── docker-compose.yml  # All services
+│   │   ├── routes/
+│   │   │   └── discord.ts       # All Discord-related endpoints
+│   │   ├── middleware/
+│   │   │   └── clerk.ts         # Clerk auth middleware
+│   │   └── lib/
+│   │       └── prisma.ts        # Database client
+│   ├── prisma/
+│   │   ├── schema.prisma        # Database schema
+│   │   └── migrations/          # SQL migrations
+│   └── docker-compose.yml       # All services defined here
 │
-├── web/                     # Next.js dashboard
+├── web/                          # Next.js Dashboard
 │   └── src/
-│       ├── app/            # Pages (dashboard, claim, auth)
-│       └── lib/            # API client
+│       ├── app/
+│       │   ├── page.tsx         # Landing page
+│       │   ├── dashboard/       # Main dashboard
+│       │   ├── claim/           # Claim token page
+│       │   └── sign-in/         # Auth pages
+│       └── lib/
+│           └── api.ts           # Backend API client
 │
-├── discord-user-client/     # Go Discord bot
-│   ├── cmd/                # Main entry point
+├── discord-user-client/          # Go Discord Bot
+│   ├── cmd/
+│   │   └── discord-client/
+│   │       └── main.go          # Entry point
 │   └── internal/
-│       ├── client/         # Discord connection
-│       ├── huma/           # HUMA AI integration
-│       └── history/        # Message history
+│       ├── client/
+│       │   └── discord.go       # Discord connection
+│       ├── huma/
+│       │   ├── client.go        # HUMA WebSocket client
+│       │   └── manager.go       # Agent management
+│       ├── backend/
+│       │   └── config.go        # Backend API client
+│       └── history/
+│           └── message_history.go
 │
-└── chrome-extension/        # Token capture extension
-    └── popup/              # Extension UI
+└── chrome-extension/             # Token Capture Extension
+    ├── manifest.json
+    ├── popup/
+    │   ├── popup.html
+    │   ├── popup.js
+    │   └── popup.css
+    └── src/
+        └── content/
+            └── discord-injector.js  # Token extraction
 ```
+
+---
+
+## API Endpoints
+
+### Public (Chrome Extension)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/discord/submit-token` | Submit Discord token, get claim code |
+
+### Authenticated (Clerk)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/discord/claim-token` | Claim token with code |
+| GET | `/api/discord/status` | Get connection status & stats |
+| POST | `/api/discord/disconnect` | Disconnect Discord |
+| GET | `/api/discord/guilds` | List user's Discord servers |
+| POST | `/api/discord/guild` | Select server to monitor |
+| DELETE | `/api/discord/guild` | Remove server selection |
+| GET | `/api/discord/config` | Get AI configuration |
+| POST | `/api/discord/config` | Save AI configuration |
+
+### Internal (API Key)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/discord/tokens` | Get all tokens (for Go client) |
+| POST | `/api/discord/stats` | Report message stats |
+
+---
 
 ## Troubleshooting
 
-### Services not starting
+### "No Discord tokens found"
+- Make sure you've claimed a token in the dashboard
+- Check backend logs: `docker compose logs backend`
 
+### Extension not capturing token
+- Make sure you're logged into Discord (discord.com)
+- Refresh Discord page, then try again
+- Check browser console for errors (F12)
+
+### Bot not responding
+- Check discord-client logs: `docker compose logs discord-client`
+- Verify HUMA_API_KEY is correct
+- Make sure you selected a server in dashboard
+
+### Database issues
 ```bash
-# Check logs for errors
-docker compose logs
-
-# Ensure ports aren't in use
-lsof -i :3000 -i :3001 -i :5432 -i :8080
+# Reset everything
+docker compose down -v
+docker compose up -d
+docker compose exec backend npx prisma migrate deploy
 ```
 
-### Database connection issues
+---
 
-```bash
-# Restart postgres
-docker compose restart postgres
+## Tech Stack
 
-# Check if postgres is healthy
-docker compose ps
-```
-
-### Discord client not connecting
-
-```bash
-# Check discord-client logs
-docker compose logs discord-client
-
-# Ensure HUMA_API_KEY is set correctly
-# Ensure a Discord token has been claimed in the dashboard
-```
-
-### Chrome extension not working
-
-- Make sure you're on discord.com
-- Check browser console for errors
-- Try reloading the extension
-
-## License
-
-MIT
+- **Frontend**: Next.js 14, React, Tailwind CSS
+- **Auth**: Clerk
+- **Backend**: Express.js, TypeScript
+- **Database**: PostgreSQL, Prisma ORM
+- **Discord Bot**: Go, discordgo
+- **AI**: HUMA (humalike.tech)
+- **DevOps**: Docker, Docker Compose
