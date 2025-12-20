@@ -15,14 +15,28 @@ export interface AuthenticatedRequest extends Request {
 
 // Helper to get or create user from Clerk session
 export async function getOrCreateUser(clerkUserId: string, email?: string | null) {
-  return prisma.user.upsert({
-    where: { clerkUserId },
-    update: { email: email || undefined },
-    create: {
-      clerkUserId,
-      email: email || undefined
+  try {
+    return await prisma.user.upsert({
+      where: { clerkUserId },
+      update: { email: email || undefined },
+      create: {
+        clerkUserId,
+        email: email || undefined
+      }
+    });
+  } catch (error: any) {
+    // Handle race condition: if unique constraint fails, the user was just created
+    // by another concurrent request, so fetch it instead
+    if (error.code === 'P2002') {
+      const existingUser = await prisma.user.findUnique({
+        where: { clerkUserId }
+      });
+      if (existingUser) {
+        return existingUser;
+      }
     }
-  });
+    throw error;
+  }
 }
 
 // Middleware to require auth and ensure user exists in our database
