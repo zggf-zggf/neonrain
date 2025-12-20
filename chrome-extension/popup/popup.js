@@ -1,4 +1,4 @@
-const BACKEND_URL = 'http://localhost:3000';
+const BACKEND_URL = 'http://104.154.141.204:3000';
 
 let capturedToken = null;
 let countdownInterval = null;

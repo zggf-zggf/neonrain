@@ -16,6 +16,7 @@
   ],
   "host_permissions": [
     "http://localhost:3000/*",
+    "http://104.154.141.204:3000/*",
     "https://*.discord.com/*"
   ],
   "content_scripts": [
