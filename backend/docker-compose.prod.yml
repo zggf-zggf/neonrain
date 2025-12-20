@@ -1,0 +1,77 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: neonrain-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=neonrain
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    image: us-central1-docker.pkg.dev/neonrain-prod/neonrain/backend:latest
+    container_name: neonrain-backend
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/neonrain?schema=public
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY:-secure-internal-key-change-me}
+      - GO_SERVICE_URL=http://discord-client:8080
+      - CLERK_PUBLISHABLE_KEY=${CLERK_PUBLISHABLE_KEY}
+      - CLERK_SECRET_KEY=${CLERK_SECRET_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  web:
+    image: us-central1-docker.pkg.dev/neonrain-prod/neonrain/web:latest
+    container_name: neonrain-web
+    ports:
+      - "3001:3000"
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  discord-client:
+    image: us-central1-docker.pkg.dev/neonrain-prod/neonrain/discord-client:latest
+    container_name: neonrain-discord-client
+    ports:
+      - "8080:8080"
+    environment:
+      - BACKEND_URL=http://backend:3000
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY:-secure-internal-key-change-me}
+      - HTTP_PORT=8080
+      - HUMA_API_KEY=${HUMA_API_KEY}
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
