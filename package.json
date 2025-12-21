@@ -1,0 +1,18 @@
+{
+  "name": "neonrain",
+  "version": "1.0.0",
+  "description": "NeonRain - Discord automation platform",
+  "private": true,
+  "scripts": {
+    "setup": "./scripts/setup-railway.sh",
+    "deploy": "./scripts/deploy.sh --all",
+    "deploy:backend": "./scripts/deploy.sh --service backend",
+    "deploy:web": "./scripts/deploy.sh --service web",
+    "deploy:discord": "./scripts/deploy.sh --service discord-client",
+    "railway:status": "railway status",
+    "railway:logs": "railway logs",
+    "railway:open": "railway open"
+  },
+  "keywords": ["discord", "automation", "railway"],
+  "license": "MIT"
+}

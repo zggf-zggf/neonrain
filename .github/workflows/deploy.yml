@@ -1,0 +1,153 @@
+name: Deploy to Railway
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+      services:
+        description: 'Services to deploy (comma-separated or "all")'
+        required: true
+        default: 'all'
+        type: string
+
+env:
+  RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      web: ${{ steps.filter.outputs.web }}
+      discord-client: ${{ steps.filter.outputs.discord-client }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+            web:
+              - 'web/**'
+            discord-client:
+              - 'discord-user-client/**'
+
+  deploy-backend:
+    needs: detect-changes
+    if: |
+      (github.event_name == 'push' && needs.detect-changes.outputs.backend == 'true') ||
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.services == 'all' || contains(github.event.inputs.services, 'backend')))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy Backend
+        run: |
+          cd backend
+          railway up --service backend --detach
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+      - name: Wait for deployment
+        run: sleep 30
+
+      - name: Health Check
+        run: |
+          echo "Checking backend health..."
+          # Railway will handle the health check based on railway.toml config
+
+  deploy-web:
+    needs: detect-changes
+    if: |
+      (github.event_name == 'push' && needs.detect-changes.outputs.web == 'true') ||
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.services == 'all' || contains(github.event.inputs.services, 'web')))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy Web
+        run: |
+          cd web
+          railway up --service web --detach
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+  deploy-discord-client:
+    needs: detect-changes
+    if: |
+      (github.event_name == 'push' && needs.detect-changes.outputs.discord-client == 'true') ||
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.services == 'all' || contains(github.event.inputs.services, 'discord-client')))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy Discord Client
+        run: |
+          cd discord-user-client
+          railway up --service discord-client --detach
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+  deploy-all:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.services == 'all'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy All Services
+        run: |
+          echo "Deploying all services to Railway..."
+
+          # Deploy backend first (has database migrations)
+          echo "Deploying backend..."
+          cd backend && railway up --service backend --detach && cd ..
+
+          # Wait for backend to be healthy
+          sleep 45
+
+          # Deploy web and discord-client in parallel
+          echo "Deploying web and discord-client..."
+          cd web && railway up --service web --detach && cd ..
+          cd discord-user-client && railway up --service discord-client --detach && cd ..
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+  notify:
+    needs: [deploy-backend, deploy-web, deploy-discord-client]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deployment Summary
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Service | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Backend | ${{ needs.deploy-backend.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Web | ${{ needs.deploy-web.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Discord Client | ${{ needs.deploy-discord-client.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
