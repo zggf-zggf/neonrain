@@ -4,8 +4,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: neonrain-postgres
-    ports:
-      - "5432:5432"
+    # Port not exposed externally - only accessible within Docker network
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
@@ -49,7 +48,7 @@ services:
       dockerfile: Dockerfile
       args:
         - NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${CLERK_PUBLISHABLE_KEY}
-        - NEXT_PUBLIC_BACKEND_URL=http://104.154.141.204:3000
+        - NEXT_PUBLIC_BACKEND_URL=https://api.neonrain.humalike.ai
     container_name: neonrain-web
     ports:
       - "3001:3000"
@@ -57,7 +56,7 @@ services:
       - NODE_ENV=production
       - NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${CLERK_PUBLISHABLE_KEY}
       - CLERK_SECRET_KEY=${CLERK_SECRET_KEY}
-      - NEXT_PUBLIC_BACKEND_URL=http://104.154.141.204:3000
+      - NEXT_PUBLIC_BACKEND_URL=https://api.neonrain.humalike.ai
     depends_on:
       - backend
     restart: unless-stopped
