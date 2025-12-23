@@ -5,7 +5,7 @@ set -e
 # Prerequisites: gcloud CLI installed and authenticated
 
 # Configuration - adjust as needed
-VM_NAME="neonrain-vm"
+VM_NAME="neonrain-prod"
 ZONE="us-central1-a"
 MACHINE_TYPE="e2-medium"  # 2 vCPU, 4GB RAM (~$25/month)
 DISK_SIZE="50GB"          # Enough for Docker images
