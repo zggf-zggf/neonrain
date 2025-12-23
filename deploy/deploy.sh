@@ -4,7 +4,15 @@ set -e
 # NeonRain Deployment Script
 # Run this to deploy or update the application
 
-APP_DIR="/mnt/data/neonrain"
+# Find app directory
+if [ -d "/mnt/data/neonrain" ]; then
+    APP_DIR="/mnt/data/neonrain"
+elif [ -d "/opt/neonrain" ]; then
+    APP_DIR="/opt/neonrain"
+else
+    echo "Error: neonrain not found in /mnt/data or /opt"
+    exit 1
+fi
 COMPOSE_DIR="$APP_DIR/backend"
 
 echo "=== NeonRain Deployment ==="

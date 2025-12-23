@@ -8,11 +8,17 @@ set -e
 echo "=== NeonRain VM Setup ==="
 
 # Configuration
-DATA_DIR="/mnt/data"
-APP_DIR="$DATA_DIR/neonrain"
-DOCKER_DATA_DIR="$DATA_DIR/docker"
 DOMAIN="neonrain.humalike.ai"
 API_DOMAIN="api.neonrain.humalike.ai"
+
+# Use /mnt/data if it exists (separate data disk), otherwise use /opt
+if [ -d "/mnt/data" ]; then
+    DATA_DIR="/mnt/data"
+else
+    DATA_DIR="/opt"
+fi
+APP_DIR="$DATA_DIR/neonrain"
+DOCKER_DATA_DIR="$DATA_DIR/docker"
 
 # Check if running as root or with sudo
 if [ "$EUID" -ne 0 ]; then
