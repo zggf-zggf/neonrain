@@ -21,6 +21,7 @@ COPY . .
 
 # Build with Doppler injecting NEXT_PUBLIC_* vars
 ARG DOPPLER_TOKEN
+ENV DOPPLER_TOKEN=$DOPPLER_TOKEN
 RUN doppler run -- npm run build
 
 # Production image, copy all the files and run next
