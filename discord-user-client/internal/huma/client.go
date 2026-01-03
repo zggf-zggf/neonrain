@@ -236,6 +236,11 @@ func (c *Client) SendContextUpdate(eventName, description string, context map[st
 
 // SendToolResult sends a tool result back to HUMA as a context update
 func (c *Client) SendToolResult(toolCallID string, success bool, result interface{}, errMsg string) error {
+	return c.SendToolResultWithContext(toolCallID, success, result, errMsg, nil)
+}
+
+// SendToolResultWithContext sends a tool result with additional context to HUMA
+func (c *Client) SendToolResultWithContext(toolCallID string, success bool, result interface{}, errMsg string, extraContext map[string]interface{}) error {
 	c.mu.RLock()
 	if !c.connected || c.conn == nil {
 		c.mu.RUnlock()
@@ -257,6 +262,11 @@ func (c *Client) SendToolResult(toolCallID string, success bool, result interfac
 	} else {
 		context["error"] = errMsg
 		description = fmt.Sprintf("Tool call %s failed: %s", toolCallID, errMsg)
+	}
+
+	// Merge extra context if provided
+	for k, v := range extraContext {
+		context[k] = v
 	}
 
 	// Send as context update with HUMA's expected format

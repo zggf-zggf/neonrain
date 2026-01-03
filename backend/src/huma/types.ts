@@ -54,6 +54,7 @@ export interface ToolResultContent {
   success: boolean;
   result?: unknown;
   error?: string;
+  context?: Record<string, unknown>;
 }
 
 // Events received from HUMA

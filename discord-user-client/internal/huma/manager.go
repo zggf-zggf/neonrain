@@ -671,7 +671,14 @@ func (a *GuildAgent) processMessageWithTyping(toolCallID, channelID, message str
 			}
 
 			log.Printf("[HUMA-Agent] Message sent successfully (ID: %s)", toolCallID)
-			a.Client.SendToolResult(toolCallID, true, "Message sent successfully", "")
+
+			// Build updated conversation history including the new bot message
+			updatedHistory := a.buildUpdatedConversationHistory(channelID, message)
+			extraContext := map[string]interface{}{
+				"conversationHistory": updatedHistory,
+			}
+
+			a.Client.SendToolResultWithContext(toolCallID, true, "Message sent successfully", "", extraContext)
 			return
 
 		case <-typingTicker.C:
@@ -703,6 +710,29 @@ func (a *GuildAgent) handleCancelToolCall(toolCallID, reason string) {
 		// Send canceled result
 		a.Client.SendToolCanceled(toolCallID, reason)
 	}
+}
+
+// buildUpdatedConversationHistory builds the conversation history string including a new bot message
+func (a *GuildAgent) buildUpdatedConversationHistory(channelID, newBotMessage string) string {
+	botName := "Bot"
+	if a.sender != nil {
+		botName = a.sender.GetBotUsername()
+	}
+
+	// Get current history
+	var historyStr string
+	if a.history != nil {
+		messages := a.history.GetMessages(channelID)
+		for _, msg := range messages {
+			historyStr += fmt.Sprintf("[%s] %s: %s\n", msg.Timestamp, msg.Author, msg.Content)
+		}
+	}
+
+	// Add the new bot message
+	now := time.Now().Format(time.RFC3339)
+	historyStr += fmt.Sprintf("[%s] %s: %s\n", now, botName, newBotMessage)
+
+	return historyStr
 }
 
 // UpdateConfig updates the agent configuration

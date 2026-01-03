@@ -152,7 +152,8 @@ export class HumaClient {
     toolCallId: string,
     success: boolean,
     result?: unknown,
-    error?: string
+    error?: string,
+    context?: Record<string, unknown>
   ): void {
     if (!this.isConnected() || !this.socket) {
       throw new Error('Not connected');
@@ -169,6 +170,10 @@ export class HumaClient {
       content.result = result;
     } else {
       content.error = error;
+    }
+
+    if (context) {
+      content.context = context;
     }
 
     const event: HumaEvent = {

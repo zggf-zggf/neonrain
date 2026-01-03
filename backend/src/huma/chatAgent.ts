@@ -32,6 +32,7 @@ export class ChatAgent {
   private cancelRequested = false;
   private onMessage: MessageCallback | null = null;
   private onTyping: TypingCallback | null = null;
+  private lastConversationHistory: ChatMessage[] = [];
 
   constructor(
     apiKey: string,
@@ -84,6 +85,9 @@ export class ChatAgent {
   }
 
   async sendMessage(content: string, conversationHistory: ChatMessage[]): Promise<void> {
+    // Store the history for use when sending tool results
+    this.lastConversationHistory = conversationHistory;
+
     const context = this.buildContext(content, conversationHistory);
     const description = `User sent a message: "${content.substring(0, 100)}${content.length > 100 ? '...' : ''}"`;
 
@@ -248,7 +252,13 @@ Use send_message to respond to the user. Only respond when you have something me
       // Send the message
       this.onTyping?.(false);
       this.onMessage?.(message);
-      this.client.sendToolResult(toolCallId, true, 'Message sent');
+
+      // Build updated conversation history including the new assistant message
+      const updatedHistory = this.buildUpdatedHistoryString(message);
+
+      this.client.sendToolResult(toolCallId, true, 'Message sent', undefined, {
+        conversationHistory: updatedHistory,
+      });
       this.pendingResponse = null;
     }, delay);
 
@@ -275,5 +285,22 @@ Use send_message to respond to the user. Only respond when you have something me
     const seconds = (words / WPM) * 60;
     const delay = Math.max(500, Math.min(30000, seconds * 1000));
     return delay;
+  }
+
+  private buildUpdatedHistoryString(newAssistantMessage: string): string {
+    // Build history string from stored history
+    const historyStr = this.lastConversationHistory
+      .map((msg) => {
+        const role = msg.role === 'user' ? this.userName : 'Assistant';
+        const time = msg.createdAt.toISOString();
+        return `[${time}] ${role}: ${msg.content}`;
+      })
+      .join('\n');
+
+    // Add the new assistant message
+    const now = new Date().toISOString();
+    const newLine = `[${now}] Assistant: ${newAssistantMessage}`;
+
+    return historyStr ? `${historyStr}\n${newLine}` : newLine;
   }
 }
