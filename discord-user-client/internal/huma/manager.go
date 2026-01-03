@@ -662,6 +662,9 @@ func (a *GuildAgent) processMessageWithTyping(toolCallID, channelID, message str
 
 			log.Printf("[HUMA-Agent] Message sent successfully (ID: %s)", toolCallID)
 			a.Client.SendToolResult(toolCallID, true, "Message sent successfully", "")
+
+			// Send context update with refreshed message history
+			a.sendHistoryUpdate(channelID, message)
 			return
 
 		case <-typingTicker.C:
@@ -692,6 +695,64 @@ func (a *GuildAgent) handleCancelToolCall(toolCallID, reason string) {
 
 		// Send canceled result
 		a.Client.SendToolCanceled(toolCallID, reason)
+	}
+}
+
+// sendHistoryUpdate sends a context update with refreshed message history after sending a message
+func (a *GuildAgent) sendHistoryUpdate(channelID, sentMessage string) {
+	if a.sender == nil || a.history == nil {
+		return
+	}
+
+	// Get channel name
+	channelName := channelID
+	channels := a.sender.GetAllChannelsForGuild(a.GuildID)
+	for _, ch := range channels {
+		if ch.ID == channelID {
+			channelName = ch.Name
+			break
+		}
+	}
+
+	// Get bot username
+	botName := a.sender.GetBotUsername()
+
+	// Build conversation history including the message we just sent
+	var conversationHistory string
+	if messages := a.history.GetMessages(channelID); len(messages) > 0 {
+		for _, msg := range messages {
+			conversationHistory += fmt.Sprintf("[%s] %s: %s\n", msg.Timestamp, msg.Author, msg.Content)
+		}
+	}
+	// Add the message we just sent (may not be in history yet)
+	conversationHistory += fmt.Sprintf("[just now] %s: %s\n", botName, sentMessage)
+
+	context := map[string]interface{}{
+		"guild": map[string]interface{}{
+			"id":   a.GuildID,
+			"name": a.GuildName,
+		},
+		"you": map[string]interface{}{
+			"name": botName,
+		},
+		"currentChannel": map[string]interface{}{
+			"id":                  channelID,
+			"name":                channelName,
+			"conversationHistory": conversationHistory,
+		},
+		"lastAction": map[string]interface{}{
+			"type":    "message_sent",
+			"channel": channelName,
+			"content": sentMessage,
+		},
+	}
+
+	description := fmt.Sprintf("You just sent a message in #%s: \"%s\"", channelName, truncateString(sentMessage, 50))
+
+	if err := a.Client.SendContextUpdate("message-sent", description, context); err != nil {
+		log.Printf("[HUMA-Agent] Error sending history update: %v", err)
+	} else {
+		log.Printf("[HUMA-Agent] Sent history update for channel %s", channelName)
 	}
 }
 
