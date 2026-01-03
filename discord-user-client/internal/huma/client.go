@@ -234,7 +234,7 @@ func (c *Client) SendContextUpdate(eventName, description string, context map[st
 	return nil
 }
 
-// SendToolResult sends a tool result back to HUMA
+// SendToolResult sends a tool result back to HUMA as a context update
 func (c *Client) SendToolResult(toolCallID string, success bool, result interface{}, errMsg string) error {
 	c.mu.RLock()
 	if !c.connected || c.conn == nil {
@@ -243,23 +243,30 @@ func (c *Client) SendToolResult(toolCallID string, success bool, result interfac
 	}
 	c.mu.RUnlock()
 
-	// Build the tool result content
-	content := map[string]interface{}{
+	// Build context with tool result
+	context := map[string]interface{}{
 		"toolCallId": toolCallID,
 		"status":     "completed",
 		"success":    success,
 	}
 
+	var description string
 	if success {
-		content["result"] = result
+		context["result"] = result
+		description = fmt.Sprintf("Tool call %s completed successfully", toolCallID)
 	} else {
-		content["error"] = errMsg
+		context["error"] = errMsg
+		description = fmt.Sprintf("Tool call %s failed: %s", toolCallID, errMsg)
 	}
 
-	// Try using "tool-result" as the event type instead of "huma-0.1-event"
-	event := map[string]interface{}{
-		"type":    "tool-result",
-		"content": content,
+	// Send as context update with HUMA's expected format
+	event := HumaEvent{
+		Type: "huma-0.1-event",
+		Content: ContextUpdateContent{
+			Name:        "tool-result",
+			Context:     context,
+			Description: description,
+		},
 	}
 
 	jsonData, err := json.Marshal([]interface{}{"message", event})
@@ -286,16 +293,20 @@ func (c *Client) SendToolCanceled(toolCallID, reason string) error {
 	}
 	c.mu.RUnlock()
 
-	content := map[string]interface{}{
+	context := map[string]interface{}{
 		"toolCallId": toolCallID,
 		"status":     "canceled",
 		"success":    false,
 		"error":      reason,
 	}
 
-	event := map[string]interface{}{
-		"type":    "tool-result",
-		"content": content,
+	event := HumaEvent{
+		Type: "huma-0.1-event",
+		Content: ContextUpdateContent{
+			Name:        "tool-result",
+			Context:     context,
+			Description: fmt.Sprintf("Tool call %s was canceled: %s", toolCallID, reason),
+		},
 	}
 
 	jsonData, err := json.Marshal([]interface{}{"message", event})
