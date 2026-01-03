@@ -23,8 +23,9 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Local env files
-.env*.local
+# Environment files - using Doppler for secrets management
+.env
+.env.*
 
 # Vercel
 .vercel

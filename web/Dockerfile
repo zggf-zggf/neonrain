@@ -11,17 +11,17 @@ RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 # Rebuild the source code only when needed
 FROM base AS builder
 WORKDIR /app
+
+# Install Doppler CLI for build-time secrets (NEXT_PUBLIC_* vars)
+RUN apk add --no-cache curl bash && \
+    curl -Ls https://cli.doppler.com/install.sh | sh
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Build args for Next.js (required at build time)
-ARG NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
-ARG NEXT_PUBLIC_BACKEND_URL
-ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
-ENV NEXT_PUBLIC_BACKEND_URL=$NEXT_PUBLIC_BACKEND_URL
-
-# Build the application
-RUN npm run build
+# Build with Doppler injecting NEXT_PUBLIC_* vars
+ARG DOPPLER_TOKEN
+RUN doppler run -- npm run build
 
 # Production image, copy all the files and run next
 FROM base AS runner

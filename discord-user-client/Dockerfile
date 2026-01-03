@@ -18,7 +18,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o discord-client ./
 # Final stage
 FROM alpine:latest
 
-RUN apk --no-cache add ca-certificates
+# Install Doppler CLI
+RUN apk --no-cache add ca-certificates curl bash && \
+    curl -Ls https://cli.doppler.com/install.sh | sh
 
 WORKDIR /root/
 
@@ -28,5 +30,5 @@ COPY --from=builder /app/discord-client .
 # Expose the HTTP port
 EXPOSE 8080
 
-# Run the application
-CMD ["./discord-client"]
+# Run the application with Doppler injecting secrets
+CMD ["doppler", "run", "--", "./discord-client"]

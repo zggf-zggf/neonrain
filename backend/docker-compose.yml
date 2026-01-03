@@ -1,5 +1,12 @@
 version: '3.8'
 
+# Doppler tokens are required for deployment:
+# - DOPPLER_TOKEN_WEB: used at build time for Next.js NEXT_PUBLIC_* vars
+# - DOPPLER_TOKEN_BACKEND: used at runtime for backend secrets
+# - DOPPLER_TOKEN_DISCORD: used at runtime for discord-client secrets
+#
+# Generate tokens with: doppler configs tokens create <name> --config prd --plain
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -24,13 +31,10 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - PORT=3000
-      - NODE_ENV=production
+      - DOPPLER_TOKEN=${DOPPLER_TOKEN_BACKEND}
+      # Override DATABASE_URL to use docker network hostname
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/neonrain?schema=public
-      - INTERNAL_API_KEY=${INTERNAL_API_KEY:-secure-internal-key-change-me}
       - GO_SERVICE_URL=http://discord-client:8080
-      - CLERK_PUBLISHABLE_KEY=${CLERK_PUBLISHABLE_KEY}
-      - CLERK_SECRET_KEY=${CLERK_SECRET_KEY}
     depends_on:
       postgres:
         condition: service_healthy
@@ -47,16 +51,10 @@ services:
       context: ../web
       dockerfile: Dockerfile
       args:
-        - NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${CLERK_PUBLISHABLE_KEY}
-        - NEXT_PUBLIC_BACKEND_URL=https://api.neonrain.humalike.ai
+        DOPPLER_TOKEN: ${DOPPLER_TOKEN_WEB}
     container_name: neonrain-web
     ports:
       - "3001:3000"
-    environment:
-      - NODE_ENV=production
-      - NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${CLERK_PUBLISHABLE_KEY}
-      - CLERK_SECRET_KEY=${CLERK_SECRET_KEY}
-      - NEXT_PUBLIC_BACKEND_URL=https://api.neonrain.humalike.ai
     depends_on:
       - backend
     restart: unless-stopped
@@ -69,10 +67,9 @@ services:
     ports:
       - "8080:8080"
     environment:
+      - DOPPLER_TOKEN=${DOPPLER_TOKEN_DISCORD}
+      # Override to use docker network hostname
       - BACKEND_URL=http://backend:3000
-      - INTERNAL_API_KEY=${INTERNAL_API_KEY:-secure-internal-key-change-me}
-      - HTTP_PORT=8080
-      - HUMA_API_KEY=${HUMA_API_KEY}
     depends_on:
       backend:
         condition: service_healthy

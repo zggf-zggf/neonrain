@@ -1,7 +1,8 @@
 FROM node:20-alpine
 
-# Install OpenSSL for Prisma
-RUN apk add --no-cache openssl openssl-dev
+# Install OpenSSL for Prisma and Doppler CLI
+RUN apk add --no-cache openssl openssl-dev curl bash && \
+    curl -Ls https://cli.doppler.com/install.sh | sh
 
 WORKDIR /app
 
@@ -28,5 +29,5 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # Expose port
 EXPOSE 3000
 
-# Start the application
-ENTRYPOINT ["docker-entrypoint.sh"]
+# Start the application with Doppler injecting secrets
+ENTRYPOINT ["doppler", "run", "--", "docker-entrypoint.sh"]

@@ -7,10 +7,9 @@ dist/
 build/
 *.tsbuildinfo
 
-# Environment variables
+# Environment files - using Doppler for secrets management
 .env
-.env.local
-.env.*.local
+.env.*
 
 # IDE
 .vscode/
