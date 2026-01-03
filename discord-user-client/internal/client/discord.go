@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 
 	"github.com/bwmarrin/discordgo"
@@ -345,6 +346,11 @@ func (dc *DiscordClient) processMessageWithHUMA(msg *discordgo.MessageCreate) {
 	)
 	if err != nil {
 		log.Printf("[HUMA] Error sending message to HUMA: %v", err)
+		// If websocket is closed, remove agent so it reconnects on next message
+		if strings.Contains(err.Error(), "websocket") || strings.Contains(err.Error(), "close") {
+			log.Printf("[HUMA] Connection dead, will reconnect on next message")
+			dc.humaManager.RemoveAgent(guildID)
+		}
 	}
 }
 

@@ -105,6 +105,18 @@ func (m *Manager) SetWebsites(websites []types.WebsiteData) {
 	m.websites = websites
 }
 
+// RemoveAgent removes an agent (called when connection is dead)
+func (m *Manager) RemoveAgent(guildID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if agent, exists := m.agents[guildID]; exists {
+		log.Printf("[HUMA-Manager] Removing dead agent for guild %s", guildID)
+		agent.Client.Disconnect()
+		delete(m.agents, guildID)
+	}
+}
+
 // GetOrCreateAgent gets an existing agent for a guild or creates a new one
 func (m *Manager) GetOrCreateAgent(guildID, guildName string) (*GuildAgent, error) {
 	m.mu.Lock()
