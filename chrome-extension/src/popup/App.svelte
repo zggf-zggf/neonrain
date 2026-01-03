@@ -1,7 +1,11 @@
 <script>
   import { onMount } from 'svelte';
 
-  const BACKEND_URL = 'http://104.154.141.204:3000';
+  const PROD_URL = 'https://neonrain.humalike.tech';
+  const DEV_URL = 'http://localhost:3000';
+
+  let devMode = false;
+  $: BACKEND_URL = devMode ? DEV_URL : PROD_URL;
 
   let isLoggedIn = false;
   let isRegistering = false;
@@ -50,7 +54,12 @@
   }
 
   onMount(() => {
-    checkBackendHealth();
+    // Load dev mode setting
+    chrome.storage.local.get(['devMode'], (result) => {
+      devMode = result.devMode || false;
+      // Check backend health after loading dev mode
+      checkBackendHealth();
+    });
     checkAuth();
 
     // Listen for token from content script
@@ -588,13 +597,34 @@ If this still doesn't work, check the Console for errors.`;
     isRegistering = !isRegistering;
     error = '';
   }
+
+  function toggleDevMode() {
+    devMode = !devMode;
+    chrome.storage.local.set({ devMode });
+    // Re-check backend health with new URL
+    backendStatus = 'checking';
+    backendMessage = 'Checking backend connection...';
+    checkBackendHealth();
+    // Clear auth when switching modes (different backends have different users)
+    chrome.storage.local.remove(['authToken', 'userEmail'], () => {
+      isLoggedIn = false;
+      userEmail = '';
+      discordConnected = false;
+    });
+  }
 </script>
 
 <div class="container">
-  <!-- Backend Status Indicator -->
+  <!-- Dev Mode Toggle & Backend Status -->
   <div class="status-bar">
-    <div class="status-indicator status-{backendStatus}"></div>
-    <span class="status-text">{backendMessage}</span>
+    <div class="status-left">
+      <div class="status-indicator status-{backendStatus}"></div>
+      <span class="status-text">{backendMessage}</span>
+    </div>
+    <label class="dev-toggle" title={devMode ? 'Switch to Production' : 'Switch to Developer Mode'}>
+      <input type="checkbox" checked={devMode} on:change={toggleDevMode} />
+      <span class="dev-label">{devMode ? 'DEV' : 'PROD'}</span>
+    </label>
   </div>
 
   {#if isLoggedIn}
@@ -933,11 +963,48 @@ If this still doesn't work, check the Console for errors.`;
   .status-bar {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     padding: 10px;
     background-color: #f5f5f5;
     border-radius: 4px;
     margin-bottom: 20px;
     gap: 8px;
+  }
+
+  .status-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .dev-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background-color: #e0e0e0;
+    transition: background-color 0.2s;
+  }
+
+  .dev-toggle:hover {
+    background-color: #d0d0d0;
+  }
+
+  .dev-toggle input {
+    display: none;
+  }
+
+  .dev-toggle .dev-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: #4CAF50;
+  }
+
+  .dev-toggle input:checked + .dev-label {
+    color: #ff9800;
   }
 
   .status-indicator {

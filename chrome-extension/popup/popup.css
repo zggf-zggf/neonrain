@@ -16,12 +16,50 @@ body {
   padding: 20px;
 }
 
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
 h1 {
   font-size: 20px;
   font-weight: 600;
-  margin-bottom: 16px;
+  margin-bottom: 0;
   color: #fff;
-  text-align: center;
+}
+
+.dev-toggle {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background-color: #1f2937;
+  transition: background-color 0.2s;
+}
+
+.dev-toggle:hover {
+  background-color: #374151;
+}
+
+.dev-toggle input {
+  display: none;
+}
+
+.dev-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.dev-label.prod {
+  color: #10b981;
+}
+
+.dev-label.dev {
+  color: #f59e0b;
 }
 
 h2 {

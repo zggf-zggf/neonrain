@@ -8,7 +8,13 @@
 </head>
 <body>
   <div class="container">
-    <h1>NeonRain</h1>
+    <div class="header">
+      <h1>NeonRain</h1>
+      <label class="dev-toggle" title="Toggle Developer Mode">
+        <input type="checkbox" id="dev-toggle">
+        <span id="dev-label" class="dev-label prod">PROD</span>
+      </label>
+    </div>
 
     <!-- Initial State: Capture Button -->
     <div id="capture-section">
@@ -25,7 +31,7 @@
       <div id="claim-code" class="code"></div>
       <p class="description">Enter this code on the NeonRain website to link your Discord account.</p>
       <p class="expires">Code expires in <span id="countdown">10:00</span></p>
-      <a href="http://localhost:3001/claim" target="_blank" class="btn btn-secondary">
+      <a href="https://neonrain.humalike.tech/claim" target="_blank" class="btn btn-secondary">
         Go to Website
       </a>
       <button id="copy-btn" class="btn btn-outline">
@@ -42,7 +48,7 @@
     </div>
 
     <div class="footer">
-      <a href="http://localhost:3001" target="_blank">Visit NeonRain Dashboard</a>
+      <a href="https://neonrain.humalike.tech" target="_blank">Visit NeonRain Dashboard</a>
     </div>
   </div>
   <script src="popup.js"></script>

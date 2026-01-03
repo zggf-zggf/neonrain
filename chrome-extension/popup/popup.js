@@ -1,14 +1,40 @@
-const BACKEND_URL = 'http://104.154.141.204:3000';
+const PROD_URL = 'https://neonrain.humalike.tech';
+const DEV_URL = 'http://localhost:3000';
 
+let BACKEND_URL = PROD_URL;
+let devMode = false;
 let capturedToken = null;
 let countdownInterval = null;
 let claimCode = null;
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  // Load dev mode setting
+  const result = await chrome.storage.local.get(['devMode']);
+  devMode = result.devMode || false;
+  BACKEND_URL = devMode ? DEV_URL : PROD_URL;
+  updateDevModeUI();
+
   document.getElementById('capture-btn').addEventListener('click', captureToken);
   document.getElementById('retry-btn').addEventListener('click', resetUI);
   document.getElementById('copy-btn').addEventListener('click', copyCode);
+  document.getElementById('dev-toggle').addEventListener('change', toggleDevMode);
 });
+
+function updateDevModeUI() {
+  const toggle = document.getElementById('dev-toggle');
+  const label = document.getElementById('dev-label');
+  toggle.checked = devMode;
+  label.textContent = devMode ? 'DEV' : 'PROD';
+  label.className = devMode ? 'dev-label dev' : 'dev-label prod';
+}
+
+async function toggleDevMode() {
+  devMode = !devMode;
+  BACKEND_URL = devMode ? DEV_URL : PROD_URL;
+  await chrome.storage.local.set({ devMode });
+  updateDevModeUI();
+  resetUI();
+}
 
 async function captureToken() {
   const captureBtn = document.getElementById('capture-btn');
