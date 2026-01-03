@@ -35,6 +35,17 @@ export async function disconnectDiscord(token: string) {
   });
 }
 
+export async function getDiscordBotStatus(token: string): Promise<{ success: boolean; active: boolean }> {
+  return fetchWithAuth('/api/discord/bot-status', token);
+}
+
+export async function setDiscordBotStatus(token: string, active: boolean): Promise<{ success: boolean; active: boolean }> {
+  return fetchWithAuth('/api/discord/bot-status', token, {
+    method: 'POST',
+    body: JSON.stringify({ active }),
+  });
+}
+
 export async function getSelectedGuild(token: string) {
   return fetchWithAuth('/api/discord/guild', token);
 }
@@ -108,4 +119,46 @@ export async function rescrapeWebsite(token: string, guildId: string, websiteId:
 
 export async function getWebsiteStatus(token: string, guildId: string, websiteId: string): Promise<{ success: boolean; website: Website }> {
   return fetchWithAuth(`/api/servers/${guildId}/websites/${websiteId}`, token);
+}
+
+// Chat API
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+}
+
+export interface ChatConversation {
+  id: string;
+  createdAt: string;
+  messages: ChatMessage[];
+}
+
+export async function getChatConversation(token: string): Promise<{
+  success: boolean;
+  conversation: ChatConversation;
+}> {
+  return fetchWithAuth('/api/chat/conversation', token);
+}
+
+export async function getChatMessages(
+  token: string,
+  before?: string,
+  limit?: number
+): Promise<{
+  success: boolean;
+  messages: ChatMessage[];
+  hasMore: boolean;
+}> {
+  const params = new URLSearchParams();
+  if (before) params.set('before', before);
+  if (limit) params.set('limit', limit.toString());
+
+  const query = params.toString();
+  return fetchWithAuth(`/api/chat/conversation/messages${query ? `?${query}` : ''}`, token);
+}
+
+export async function clearChatConversation(token: string): Promise<{ success: boolean }> {
+  return fetchWithAuth('/api/chat/conversation', token, { method: 'DELETE' });
 }

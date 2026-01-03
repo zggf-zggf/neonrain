@@ -49,6 +49,12 @@ export default function RootLayout({
                   >
                     Dashboard
                   </a>
+                  <a
+                    href="/chat"
+                    className="px-4 py-2 text-sm text-gray-300 hover:text-white transition"
+                  >
+                    Chat
+                  </a>
                   <UserButton afterSignOutUrl="/" />
                 </SignedIn>
               </div>

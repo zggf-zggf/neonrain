@@ -18,6 +18,9 @@ model User {
   selectedGuildId   String?  @map("selected_guild_id")
   selectedGuildName String?  @map("selected_guild_name")
 
+  // Controls whether Discord bot is active (separate from web chat)
+  discordBotActive  Boolean  @default(false) @map("discord_bot_active")
+
   // Server relation (for website scraping feature)
   serverId          String?  @map("server_id")
   server            Server?  @relation(fields: [serverId], references: [id])
@@ -35,6 +38,9 @@ model User {
   lastMessageReceivedAt DateTime? @map("last_message_received_at")
   messagesSentCount     Int       @default(0) @map("messages_sent_count")
   messagesReceivedCount Int       @default(0) @map("messages_received_count")
+
+  // Web chat conversation (one per user)
+  chatConversation  ChatConversation?
 
   @@map("users")
 }
@@ -96,4 +102,27 @@ model PendingDiscordToken {
   createdAt       DateTime @default(now())
 
   @@map("pending_discord_tokens")
+}
+
+model ChatConversation {
+  id        String        @id @default(uuid())
+  userId    String        @unique @map("user_id")
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages  ChatMessage[]
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
+
+  @@map("chat_conversations")
+}
+
+model ChatMessage {
+  id             String           @id @default(uuid())
+  conversationId String           @map("conversation_id")
+  conversation   ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String           // "user" | "assistant"
+  content        String           @db.Text
+  createdAt      DateTime         @default(now()) @map("created_at")
+
+  @@index([conversationId, createdAt])
+  @@map("chat_messages")
 }

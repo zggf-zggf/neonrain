@@ -17,6 +17,7 @@ import {
   removeServerWebsite,
   rescrapeWebsite,
   getWebsiteStatus,
+  setDiscordBotStatus,
   AgentConfig,
   Website,
 } from "@/lib/api";
@@ -55,6 +56,8 @@ export default function DashboardPage() {
   const { isLoaded: isUserLoaded } = useUser();
   const [loading, setLoading] = useState(true);
   const [discordConnected, setDiscordConnected] = useState(false);
+  const [discordBotActive, setDiscordBotActive] = useState(false);
+  const [togglingBot, setTogglingBot] = useState(false);
   const [selectedGuild, setSelectedGuild] = useState<SelectedGuild | null>(null);
 
   // Agent config state
@@ -98,6 +101,7 @@ export default function DashboardPage() {
       ]);
 
       setDiscordConnected(statusRes.connected);
+      setDiscordBotActive(statusRes.botActive || false);
       setSelectedGuild(statusRes.selectedGuild || null);
 
       const loadedConfig = {
@@ -126,11 +130,31 @@ export default function DashboardPage() {
 
       await disconnectDiscord(token);
       setDiscordConnected(false);
+      setDiscordBotActive(false);
       setSelectedGuild(null);
       setSuccess("Discord disconnected");
       setTimeout(() => setSuccess(""), 3000);
     } catch (err: any) {
       setError(err.message);
+    }
+  }
+
+  async function handleToggleBot() {
+    setTogglingBot(true);
+    setError("");
+    try {
+      const token = await getToken();
+      if (!token) return;
+
+      const newActive = !discordBotActive;
+      const res = await setDiscordBotStatus(token, newActive);
+      setDiscordBotActive(res.active);
+      setSuccess(res.active ? "Discord bot activated" : "Discord bot deactivated");
+      setTimeout(() => setSuccess(""), 3000);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setTogglingBot(false);
     }
   }
 
@@ -540,6 +564,47 @@ export default function DashboardPage() {
                   </button>
                 </div>
               )}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Discord Bot Activation */}
+      {discordConnected && selectedGuild && (
+        <section className="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-6">
+          <h2 className="text-xl font-semibold text-white mb-4">
+            Discord Bot
+          </h2>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-white font-medium">
+                {discordBotActive ? "Bot is active" : "Bot is inactive"}
+              </p>
+              <p className="text-gray-400 text-sm">
+                {discordBotActive
+                  ? `Responding to messages in ${selectedGuild.name}`
+                  : "Enable to start responding to Discord messages"}
+              </p>
+            </div>
+            <button
+              onClick={handleToggleBot}
+              disabled={togglingBot}
+              className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors ${
+                discordBotActive ? "bg-green-600" : "bg-gray-600"
+              } ${togglingBot ? "opacity-50" : ""}`}
+            >
+              <span
+                className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform ${
+                  discordBotActive ? "translate-x-7" : "translate-x-1"
+                }`}
+              />
+            </button>
+          </div>
+          {discordBotActive && (
+            <div className="mt-4 p-3 bg-green-900/20 border border-green-800 rounded-lg">
+              <p className="text-green-400 text-sm">
+                The bot is now active and will respond to messages in all channels of {selectedGuild.name}.
+              </p>
             </div>
           )}
         </section>

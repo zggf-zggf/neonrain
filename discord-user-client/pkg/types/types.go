@@ -13,6 +13,7 @@ type UserConfig struct {
 	UserID            string
 	Token             string
 	Email             string
+	BotActive         bool // Whether the bot should respond to messages
 	SelectedGuildID   string
 	SelectedGuildName string
 	Personality       string
@@ -28,6 +29,7 @@ type TokenResponse struct {
 		UserID            string        `json:"userId"`
 		UserEmail         string        `json:"userEmail"`
 		DiscordToken      string        `json:"discordToken"`
+		DiscordBotActive  bool          `json:"discordBotActive"`
 		SelectedGuildID   string        `json:"selectedGuildId"`
 		SelectedGuildName string        `json:"selectedGuildName"`
 		Personality       string        `json:"personality"`

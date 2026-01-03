@@ -158,6 +158,7 @@ router.get('/status', requireAuth(), async (req: Request, res: Response) => {
     res.json({
       success: true,
       connected: !!user.discordToken,
+      botActive: user.discordBotActive,
       user: {
         id: user.id,
         email: user.email
@@ -304,6 +305,65 @@ router.delete('/guild', requireAuth(), async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('Remove guild error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get Discord bot active status
+router.get('/bot-status', requireAuth(), async (req: Request, res: Response) => {
+  try {
+    const auth = getAuth(req);
+    if (!auth.userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const user = await getOrCreateUser(auth.userId);
+
+    res.json({
+      success: true,
+      active: user.discordBotActive
+    });
+  } catch (error) {
+    console.error('Get bot status error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Set Discord bot active status
+router.post('/bot-status', requireAuth(), async (req: Request, res: Response) => {
+  try {
+    const auth = getAuth(req);
+    if (!auth.userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const user = await getOrCreateUser(auth.userId);
+    const { active } = req.body;
+
+    if (typeof active !== 'boolean') {
+      return res.status(400).json({ error: 'active must be a boolean' });
+    }
+
+    // Require Discord token and guild to activate
+    if (active && (!user.discordToken || !user.selectedGuildId)) {
+      return res.status(400).json({
+        error: 'Discord must be connected and a server must be selected to activate the bot'
+      });
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id: user.id },
+      data: { discordBotActive: active }
+    });
+
+    console.log(`[Bot Status] User ${user.id} set discordBotActive to ${active}`);
+
+    res.json({
+      success: true,
+      active: updatedUser.discordBotActive
+    });
+  } catch (error) {
+    console.error('Set bot status error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -485,6 +545,7 @@ router.get('/tokens', async (req: Request, res: Response) => {
     }
 
     // Get all users with Discord tokens, including their server websites
+    // The Go service will check discordBotActive to decide whether to respond to messages
     const users = await prisma.user.findMany({
       where: {
         discordToken: {
@@ -495,6 +556,7 @@ router.get('/tokens', async (req: Request, res: Response) => {
         id: true,
         email: true,
         discordToken: true,
+        discordBotActive: true,
         selectedGuildId: true,
         selectedGuildName: true,
         personality: true,
@@ -521,6 +583,7 @@ router.get('/tokens', async (req: Request, res: Response) => {
         userId: user.id,
         userEmail: user.email,
         discordToken: user.discordToken,
+        discordBotActive: user.discordBotActive,
         selectedGuildId: user.selectedGuildId,
         selectedGuildName: user.selectedGuildName,
         personality: user.personality || '',

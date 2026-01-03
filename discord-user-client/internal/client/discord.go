@@ -258,6 +258,7 @@ func (dc *DiscordClient) processMessageWithHUMA(msg *discordgo.MessageCreate) {
 	var websites []types.WebsiteData
 	var guildName string
 	var userID string
+	var botActive bool
 
 	if dc.configProvider != nil {
 		if config, exists := dc.configProvider.GetConfigForGuild(guildID); exists {
@@ -267,7 +268,13 @@ func (dc *DiscordClient) processMessageWithHUMA(msg *discordgo.MessageCreate) {
 			information = config.Information
 			websites = config.Websites
 			userID = config.UserID
+			botActive = config.BotActive
 		}
+	}
+
+	// Skip processing if bot is not active for this guild
+	if !botActive {
+		return
 	}
 
 	// Fallback to stored values (single-guild mode)

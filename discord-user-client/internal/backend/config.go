@@ -70,6 +70,7 @@ func (c *Client) FetchDiscordTokens() ([]types.UserConfig, error) {
 				UserID:            t.UserID,
 				Token:             t.DiscordToken,
 				Email:             t.UserEmail,
+				BotActive:         t.DiscordBotActive,
 				SelectedGuildID:   t.SelectedGuildID,
 				SelectedGuildName: t.SelectedGuildName,
 				Personality:       t.Personality,
