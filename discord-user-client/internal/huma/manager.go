@@ -281,15 +281,17 @@ You can also check monitoredChannels to see what channels exist and any recent a
 - Use to send a message to a Discord channel
 - Only send when you have something meaningful to contribute
 - Keep messages natural and conversational
-- channel_id: Use the currentChannel.id from the context (or another channel from allChannels if relevant)
+- channel_id: ALWAYS use currentChannel.id - respond in the same channel where the user messaged you
 - message: Your message content (no username prefix needed)
+- IMPORTANT: Never respond in a different channel than where the user asked you
 
 ### fetch_channel_messages
-- Use to read conversation history from ANY text channel in the server
+- Use to READ conversation history from other channels (not to respond there!)
 - channel_id: Use an ID from the "allChannels" list in context
 - limit: Optional, number of messages to fetch (1-100, default 50)
 - Returns messages in chronological order as "[timestamp] author: message"
 - Use this when someone asks about conversations in other channels
+- After fetching, respond in the CURRENT channel (where the user asked), not the fetched channel
 
 ## Information Visibility
 You CAN see:
