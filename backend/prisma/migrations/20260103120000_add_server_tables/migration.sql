@@ -35,19 +35,6 @@ CREATE TABLE "website_scrapes" (
     CONSTRAINT "website_scrapes_pkey" PRIMARY KEY ("id")
 );
 
--- CreateTable
-CREATE TABLE "pending_discord_tokens" (
-    "id" TEXT NOT NULL,
-    "discord_token" TEXT NOT NULL,
-    "claim_code" TEXT NOT NULL,
-    "expires_at" TIMESTAMP(3) NOT NULL,
-    "claimed" BOOLEAN NOT NULL DEFAULT false,
-    "claimed_by_user_id" TEXT,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "pending_discord_tokens_pkey" PRIMARY KEY ("id")
-);
-
 -- Add server_id to users
 ALTER TABLE "users" ADD COLUMN "server_id" TEXT;
 
@@ -56,9 +43,6 @@ CREATE UNIQUE INDEX "servers_guild_id_key" ON "servers"("guild_id");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "server_websites_server_id_url_key" ON "server_websites"("server_id", "url");
-
--- CreateIndex
-CREATE UNIQUE INDEX "pending_discord_tokens_claim_code_key" ON "pending_discord_tokens"("claim_code");
 
 -- AddForeignKey
 ALTER TABLE "users" ADD CONSTRAINT "users_server_id_fkey" FOREIGN KEY ("server_id") REFERENCES "servers"("id") ON DELETE SET NULL ON UPDATE CASCADE;
