@@ -376,25 +376,24 @@ export default function ChatPage() {
                 placeholder="Type a message..."
                 rows={1}
                 className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white placeholder-gray-500 resize-none focus:outline-none focus:border-indigo-500"
-                disabled={!connected || isTyping}
+                disabled={!connected}
               />
             </div>
-            {isTyping ? (
+            {isTyping && (
               <button
                 onClick={cancelResponse}
                 className="px-4 py-3 bg-red-600 text-white rounded-xl hover:bg-red-700 transition"
               >
                 Cancel
               </button>
-            ) : (
-              <button
-                onClick={sendMessage}
-                disabled={!connected || !inputValue.trim()}
-                className="px-4 py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Send
-              </button>
             )}
+            <button
+              onClick={sendMessage}
+              disabled={!connected || !inputValue.trim()}
+              className="px-4 py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Send
+            </button>
           </div>
           {!connected && (
             <div className="text-yellow-400 text-sm mt-2">Reconnecting...</div>
