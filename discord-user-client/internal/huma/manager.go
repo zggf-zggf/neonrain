@@ -17,12 +17,21 @@ type MonitoredChannel struct {
 	Name string
 }
 
+// ChannelInfo represents a Discord channel with its details
+type ChannelInfo struct {
+	ID   string
+	Name string
+	Type string // "text", "voice", "category", etc.
+}
+
 // MessageSender interface for sending Discord messages
 type MessageSender interface {
 	SendMessage(channelID, content string) error
 	SendTypingIndicator(channelID string) error
 	GetBotUsername() string
 	GetMonitoredChannelsForGuild(guildID string) []MonitoredChannel
+	GetAllChannelsForGuild(guildID string) []ChannelInfo
+	FetchChannelMessages(channelID string, limit int) ([]history.Message, error)
 }
 
 // GuildAgent represents a HUMA agent for a specific guild
@@ -272,21 +281,30 @@ You can also check monitoredChannels to see what channels exist and any recent a
 - Use to send a message to a Discord channel
 - Only send when you have something meaningful to contribute
 - Keep messages natural and conversational
-- channel_id: Use the currentChannel.id from the context (or another channel from monitoredChannels if relevant)
+- channel_id: Use the currentChannel.id from the context (or another channel from allChannels if relevant)
 - message: Your message content (no username prefix needed)
+
+### fetch_channel_messages
+- Use to read conversation history from ANY text channel in the server
+- channel_id: Use an ID from the "allChannels" list in context
+- limit: Optional, number of messages to fetch (1-100, default 50)
+- Returns messages in chronological order as "[timestamp] author: message"
+- Use this when someone asks about conversations in other channels
 
 ## Information Visibility
 You CAN see:
 - The new message that was just sent (newMessage field)
 - Full conversation history of current channel (currentChannel.conversationHistory - READ THIS)
-- List of all channels you monitor (monitoredChannels array)
-- Recent messages from other monitored channels (in monitoredChannels[].recentMessages)
+- List of ALL channels in the server (allChannels array with id, name, and type)
+- Recent messages from monitored channels (in monitoredChannels[].recentMessages)
 - Guild/server name
 - Important websites content (importantWebsites array, if provided)
 
+You CAN fetch on demand:
+- Full message history from any text channel using fetch_channel_messages tool
+
 You CANNOT see:
 - Private/DM conversations
-- Channels not in your monitoredChannels list
 - User's private information
 
 ## Important Websites
@@ -325,6 +343,24 @@ Always check these fields and follow any instructions in customRules strictly.`,
 					Type:        "string",
 					Description: "The message content to send",
 					Required:    true,
+				},
+			},
+		},
+		{
+			Name:        "fetch_channel_messages",
+			Description: "Fetch recent messages from any text channel in the server. Use this to read conversation history from channels other than the current one. Returns up to 50 messages.",
+			Parameters: []ToolParameter{
+				{
+					Name:        "channel_id",
+					Type:        "string",
+					Description: "The Discord channel ID to fetch messages from. Use IDs from the 'allChannels' list in context.",
+					Required:    true,
+				},
+				{
+					Name:        "limit",
+					Type:        "number",
+					Description: "Number of messages to fetch (1-100, default 50)",
+					Required:    false,
 				},
 			},
 		},
@@ -397,6 +433,19 @@ func (a *GuildAgent) buildContext(currentChannelID, currentChannelName, lastAuth
 		}
 	}
 
+	// Build list of ALL channels in the guild (for fetch_channel_messages tool)
+	var allChannels []map[string]interface{}
+	if a.sender != nil {
+		channels := a.sender.GetAllChannelsForGuild(a.GuildID)
+		for _, ch := range channels {
+			allChannels = append(allChannels, map[string]interface{}{
+				"id":   ch.ID,
+				"name": ch.Name,
+				"type": ch.Type,
+			})
+		}
+	}
+
 	context := map[string]interface{}{
 		"guild": map[string]interface{}{
 			"id":   a.GuildID,
@@ -414,8 +463,10 @@ func (a *GuildAgent) buildContext(currentChannelID, currentChannelName, lastAuth
 			"author":  lastAuthor,
 			"content": lastMessage,
 		},
-		// List of all channels the bot monitors in this guild
+		// List of all channels the bot monitors in this guild (with recent messages)
 		"monitoredChannels": monitoredChannels,
+		// List of ALL channels in the guild (for fetch_channel_messages tool)
+		"allChannels": allChannels,
 	}
 
 	// Add user-provided information to context (dynamic context data)
@@ -455,6 +506,8 @@ func (a *GuildAgent) handleToolCall(toolCallID, toolName string, args map[string
 	switch toolName {
 	case "send_message":
 		a.handleSendMessage(toolCallID, args)
+	case "fetch_channel_messages":
+		a.handleFetchChannelMessages(toolCallID, args)
 	default:
 		log.Printf("[HUMA-Agent] Unknown tool: %s", toolName)
 		a.Client.SendToolResult(toolCallID, false, nil, fmt.Sprintf("Unknown tool: %s", toolName))
@@ -510,6 +563,50 @@ func (a *GuildAgent) handleSendMessage(toolCallID string, args map[string]interf
 
 	// Process message with typing simulation in goroutine
 	go a.processMessageWithTyping(toolCallID, channelID, message, cancelChan)
+}
+
+// handleFetchChannelMessages handles the fetch_channel_messages tool call
+func (a *GuildAgent) handleFetchChannelMessages(toolCallID string, args map[string]interface{}) {
+	// Parse channel_id
+	channelID, ok := args["channel_id"].(string)
+	if !ok {
+		a.Client.SendToolResult(toolCallID, false, nil, "Missing or invalid channel_id")
+		return
+	}
+
+	// Parse limit (optional, default 50)
+	limit := 50
+	if limitVal, ok := args["limit"].(float64); ok {
+		limit = int(limitVal)
+	}
+
+	log.Printf("[HUMA-Agent] fetch_channel_messages called: channel=%s, limit=%d", channelID, limit)
+
+	if a.sender == nil {
+		a.Client.SendToolResult(toolCallID, false, nil, "No message sender available")
+		return
+	}
+
+	// Fetch messages from Discord
+	messages, err := a.sender.FetchChannelMessages(channelID, limit)
+	if err != nil {
+		log.Printf("[HUMA-Agent] Error fetching messages: %v", err)
+		a.Client.SendToolResult(toolCallID, false, nil, fmt.Sprintf("Failed to fetch messages: %v", err))
+		return
+	}
+
+	// Format messages as readable text
+	var result string
+	if len(messages) == 0 {
+		result = "No messages found in this channel."
+	} else {
+		for _, msg := range messages {
+			result += fmt.Sprintf("[%s] %s: %s\n", msg.Timestamp, msg.Author, msg.Content)
+		}
+	}
+
+	log.Printf("[HUMA-Agent] Fetched %d messages from channel %s", len(messages), channelID)
+	a.Client.SendToolResult(toolCallID, true, result, "")
 }
 
 // processMessageWithTyping sends a message with typing simulation

@@ -500,3 +500,80 @@ func (dc *DiscordClient) GetMonitoredChannelsForGuild(guildID string) []huma.Mon
 
 	return channels
 }
+
+// GetAllChannelsForGuild returns all channels in the guild with their types
+func (dc *DiscordClient) GetAllChannelsForGuild(guildID string) []huma.ChannelInfo {
+	var channels []huma.ChannelInfo
+
+	if dc.session == nil {
+		return channels
+	}
+
+	// Get all channels from the guild
+	guildChannels, err := dc.session.GuildChannels(guildID)
+	if err != nil {
+		log.Printf("[Discord] Failed to get guild channels: %v", err)
+		return channels
+	}
+
+	for _, ch := range guildChannels {
+		channelType := "unknown"
+		switch ch.Type {
+		case discordgo.ChannelTypeGuildText:
+			channelType = "text"
+		case discordgo.ChannelTypeGuildVoice:
+			channelType = "voice"
+		case discordgo.ChannelTypeGuildCategory:
+			channelType = "category"
+		case discordgo.ChannelTypeGuildNews:
+			channelType = "news"
+		case discordgo.ChannelTypeGuildForum:
+			channelType = "forum"
+		case discordgo.ChannelTypeGuildStageVoice:
+			channelType = "stage"
+		}
+
+		channels = append(channels, huma.ChannelInfo{
+			ID:   ch.ID,
+			Name: ch.Name,
+			Type: channelType,
+		})
+	}
+
+	return channels
+}
+
+// FetchChannelMessages fetches messages from a specific channel
+func (dc *DiscordClient) FetchChannelMessages(channelID string, limit int) ([]history.Message, error) {
+	if dc.session == nil {
+		return nil, fmt.Errorf("no active Discord session")
+	}
+
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	messages, err := dc.session.ChannelMessages(channelID, limit, "", "", "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch messages: %w", err)
+	}
+
+	// Convert to history.Message format (messages come newest first, reverse them)
+	result := make([]history.Message, 0, len(messages))
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		result = append(result, history.Message{
+			ID:        msg.ID,
+			ChannelID: msg.ChannelID,
+			Author:    msg.Author.Username,
+			AuthorID:  msg.Author.ID,
+			Content:   msg.Content,
+			Timestamp: msg.Timestamp.Format("2006-01-02 15:04:05"),
+		})
+	}
+
+	return result, nil
+}
