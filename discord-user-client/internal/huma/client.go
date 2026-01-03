@@ -243,22 +243,23 @@ func (c *Client) SendToolResult(toolCallID string, success bool, result interfac
 	}
 	c.mu.RUnlock()
 
-	content := ToolResultContent{
-		Type:       "tool-result",
-		ToolCallID: toolCallID,
-		Status:     "completed",
-		Success:    success,
+	// Build the tool result content
+	content := map[string]interface{}{
+		"toolCallId": toolCallID,
+		"status":     "completed",
+		"success":    success,
 	}
 
 	if success {
-		content.Result = result
+		content["result"] = result
 	} else {
-		content.Error = errMsg
+		content["error"] = errMsg
 	}
 
-	event := HumaEvent{
-		Type:    "huma-0.1-event",
-		Content: content,
+	// Try using "tool-result" as the event type instead of "huma-0.1-event"
+	event := map[string]interface{}{
+		"type":    "tool-result",
+		"content": content,
 	}
 
 	jsonData, err := json.Marshal([]interface{}{"message", event})
@@ -285,17 +286,16 @@ func (c *Client) SendToolCanceled(toolCallID, reason string) error {
 	}
 	c.mu.RUnlock()
 
-	content := ToolResultContent{
-		Type:       "tool-result",
-		ToolCallID: toolCallID,
-		Status:     "canceled",
-		Success:    false,
-		Error:      reason,
+	content := map[string]interface{}{
+		"toolCallId": toolCallID,
+		"status":     "canceled",
+		"success":    false,
+		"error":      reason,
 	}
 
-	event := HumaEvent{
-		Type:    "huma-0.1-event",
-		Content: content,
+	event := map[string]interface{}{
+		"type":    "tool-result",
+		"content": content,
 	}
 
 	jsonData, err := json.Marshal([]interface{}{"message", event})
