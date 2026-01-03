@@ -2,7 +2,10 @@
 set -e
 
 echo "Running database migrations..."
-npx prisma migrate deploy
+if ! npx prisma migrate deploy; then
+  echo "Migration failed, resetting database..."
+  npx prisma migrate reset --force
+fi
 
 echo "Starting application..."
 exec npm start
