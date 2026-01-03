@@ -295,7 +295,14 @@ the server owner marked as important. Use this information to:
 - Answer questions about the server's topic, products, or community
 - Reference documentation or changelogs when relevant
 - Provide accurate information based on the scraped content
-Each website includes: name, url, scrapedAt (when it was last updated), and content (the markdown)`, botName, guildName)
+Each website includes: name, url, scrapedAt (when it was last updated), and content (the markdown)
+
+## Dynamic Configuration
+The context may include these fields that can be updated live by the server owner:
+- "customRules": Additional rules you MUST follow (takes priority over base rules)
+- "customPersonality": Additional personality traits to embody
+- "userInformation": Custom information about the server/community
+Always check these fields and follow any instructions in customRules strictly.`, botName, guildName)
 
 	// Add user's custom rules to instructions
 	if m.rules != "" {
@@ -414,6 +421,16 @@ func (a *GuildAgent) buildContext(currentChannelID, currentChannelName, lastAuth
 	// Add user-provided information to context (dynamic context data)
 	if a.information != "" {
 		context["userInformation"] = a.information
+	}
+
+	// Add custom rules to context (can be updated live)
+	if a.rules != "" {
+		context["customRules"] = a.rules
+	}
+
+	// Add custom personality to context (can be updated live)
+	if a.personality != "" {
+		context["customPersonality"] = a.personality
 	}
 
 	// Add important websites to context
