@@ -30,6 +30,10 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+# Install Doppler CLI for runtime secrets (CLERK_SECRET_KEY, etc.)
+RUN apk add --no-cache curl bash gnupg && \
+    curl -Ls https://cli.doppler.com/install.sh | sh
+
 # Create a non-root user
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
@@ -46,4 +50,5 @@ EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
-CMD ["node", "server.js"]
+# Run with Doppler injecting runtime secrets
+CMD ["doppler", "run", "--", "node", "server.js"]

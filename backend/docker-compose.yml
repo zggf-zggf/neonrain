@@ -55,6 +55,8 @@ services:
     container_name: neonrain-web
     ports:
       - "3001:3000"
+    environment:
+      - DOPPLER_TOKEN=${DOPPLER_TOKEN_WEB}
     depends_on:
       - backend
     restart: unless-stopped
