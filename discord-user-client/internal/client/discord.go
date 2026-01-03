@@ -258,23 +258,23 @@ func (dc *DiscordClient) processMessageWithHUMA(msg *discordgo.MessageCreate) {
 	var websites []types.WebsiteData
 	var guildName string
 	var userID string
-	var botActive = true // Default to active for backward compatibility
 
 	if dc.configProvider != nil {
-		if config, exists := dc.configProvider.GetConfigForGuild(guildID); exists {
-			guildName = config.SelectedGuildName
-			personality = config.Personality
-			rules = config.Rules
-			information = config.Information
-			websites = config.Websites
-			userID = config.UserID
-			botActive = config.BotActive
-
-			// Skip processing if bot is not active for this guild (only in multi-guild mode)
-			if !botActive {
-				return
-			}
+		config, exists := dc.configProvider.GetConfigForGuild(guildID)
+		if !exists {
+			// Guild not in our config, skip
+			return
 		}
+		if !config.BotActive {
+			// Bot is not active for this guild, skip
+			return
+		}
+		guildName = config.SelectedGuildName
+		personality = config.Personality
+		rules = config.Rules
+		information = config.Information
+		websites = config.Websites
+		userID = config.UserID
 	}
 
 	// Fallback to stored values (single-guild mode)

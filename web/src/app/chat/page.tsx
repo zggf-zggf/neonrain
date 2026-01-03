@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { io, Socket } from "socket.io-client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { getDiscordBotStatus, setDiscordBotStatus } from "@/lib/api";
 
 interface ChatMessage {
   id: string;
@@ -29,6 +30,8 @@ export default function ChatPage() {
   const [isTyping, setIsTyping] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [discordBotActive, setDiscordBotActive] = useState(false);
+  const [activatingBot, setActivatingBot] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -143,11 +146,34 @@ export default function ChatPage() {
 
       const data = await response.json();
       setMessages(data.conversation.messages);
+
+      // Also fetch bot status
+      try {
+        const botStatus = await getDiscordBotStatus(token);
+        setDiscordBotActive(botStatus.active);
+      } catch {
+        // Ignore bot status errors
+      }
     } catch (err: unknown) {
       const errorMessage =
         err instanceof Error ? err.message : "Failed to load messages";
       console.error("[Chat] Load messages error:", err);
       setError(errorMessage);
+    }
+  }
+
+  async function handleActivateBot() {
+    setActivatingBot(true);
+    try {
+      const token = await getToken();
+      if (!token) return;
+
+      const result = await setDiscordBotStatus(token, true);
+      setDiscordBotActive(result.active);
+    } catch (err) {
+      console.error("[Chat] Failed to activate bot:", err);
+    } finally {
+      setActivatingBot(false);
     }
   }
 
@@ -204,19 +230,39 @@ export default function ChatPage() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="flex items-center justify-center w-8 h-8 rounded-full bg-indigo-600 text-white text-sm font-bold">
-                2
+                {discordBotActive ? "✓" : "2"}
               </div>
               <div>
-                <p className="text-white font-medium">Configure Your AI Assistant</p>
-                <p className="text-indigo-300 text-sm">Chat to shape its personality and behavior</p>
+                {discordBotActive ? (
+                  <>
+                    <p className="text-white font-medium">Discord Bot Active</p>
+                    <p className="text-green-300 text-sm">Your AI is now responding on Discord</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-white font-medium">Configure Your AI Assistant</p>
+                    <p className="text-indigo-300 text-sm">Chat to shape its personality, then activate on Discord</p>
+                  </>
+                )}
               </div>
             </div>
-            <button
-              onClick={() => router.push("/dashboard")}
-              className="px-3 py-1.5 text-sm bg-indigo-600/30 text-indigo-200 rounded-lg hover:bg-indigo-600/50 transition"
-            >
-              Go to Dashboard
-            </button>
+            <div className="flex items-center gap-2">
+              {!discordBotActive && messages.length >= 2 && (
+                <button
+                  onClick={handleActivateBot}
+                  disabled={activatingBot}
+                  className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition disabled:opacity-50"
+                >
+                  {activatingBot ? "Activating..." : "Activate Discord Bot"}
+                </button>
+              )}
+              <button
+                onClick={() => router.push("/dashboard")}
+                className="px-3 py-1.5 text-sm bg-indigo-600/30 text-indigo-200 rounded-lg hover:bg-indigo-600/50 transition"
+              >
+                Dashboard
+              </button>
+            </div>
           </div>
         </div>
       </div>
