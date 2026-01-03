@@ -25,7 +25,7 @@ export default function ClaimPage() {
       }
 
       await claimDiscordToken(token, code);
-      router.push("/dashboard");
+      router.push("/setup");
     } catch (err: any) {
       setError(err.message || "Failed to claim token");
     } finally {

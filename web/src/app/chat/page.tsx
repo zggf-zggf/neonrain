@@ -102,7 +102,7 @@ export default function ChatPage() {
           console.error("[Chat] Error:", message, code);
           setError(message);
           if (code === "NO_SERVER") {
-            setTimeout(() => router.push("/dashboard"), 2000);
+            setTimeout(() => router.push("/setup"), 2000);
           }
         });
 
@@ -134,8 +134,8 @@ export default function ChatPage() {
       if (!response.ok) {
         const data = await response.json();
         if (data.code === "NO_SERVER_CONFIGURED") {
-          setError("Please configure a server first");
-          setTimeout(() => router.push("/dashboard"), 2000);
+          setError("Please select a server first");
+          setTimeout(() => router.push("/setup"), 2000);
           return;
         }
         throw new Error(data.error || "Failed to load messages");
