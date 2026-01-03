@@ -225,12 +225,20 @@ router.post('/guild', requireAuth(), async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'guildName is required' });
     }
 
-    // Update user with selected guild
+    // Create or update Server record
+    const server = await prisma.server.upsert({
+      where: { guildId },
+      update: { guildName },
+      create: { guildId, guildName }
+    });
+
+    // Update user with selected guild and server relation
     const updatedUser = await prisma.user.update({
       where: { id: user.id },
       data: {
         selectedGuildId: guildId,
-        selectedGuildName: guildName
+        selectedGuildName: guildName,
+        serverId: server.id
       }
     });
 
@@ -285,7 +293,8 @@ router.delete('/guild', requireAuth(), async (req: Request, res: Response) => {
       where: { id: user.id },
       data: {
         selectedGuildId: null,
-        selectedGuildName: null
+        selectedGuildName: null,
+        serverId: null
       }
     });
 
@@ -385,10 +394,14 @@ router.get('/guilds', requireAuth(), async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Discord not connected' });
     }
 
-    // Forward request to Go service
+    // Forward request to Go service with user's token for multi-user support
     const GO_SERVICE_URL = process.env.GO_SERVICE_URL || 'http://localhost:8080';
     console.log(`[Guilds] Fetching from Go service: ${GO_SERVICE_URL}/guilds`);
-    const goResponse = await fetch(`${GO_SERVICE_URL}/guilds`);
+    const goResponse = await fetch(`${GO_SERVICE_URL}/guilds`, {
+      headers: {
+        'X-Discord-Token': user.discordToken
+      }
+    });
 
     if (!goResponse.ok) {
       console.log(`[Guilds] Go service returned status: ${goResponse.status}`);
@@ -471,7 +484,7 @@ router.get('/tokens', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // Get all users with Discord tokens
+    // Get all users with Discord tokens, including their server websites
     const users = await prisma.user.findMany({
       where: {
         discordToken: {
@@ -486,7 +499,19 @@ router.get('/tokens', async (req: Request, res: Response) => {
         selectedGuildName: true,
         personality: true,
         rules: true,
-        information: true
+        information: true,
+        server: {
+          include: {
+            websites: {
+              include: {
+                scrapes: {
+                  orderBy: { scrapedAt: 'desc' },
+                  take: 1
+                }
+              }
+            }
+          }
+        }
       }
     });
 
@@ -500,7 +525,13 @@ router.get('/tokens', async (req: Request, res: Response) => {
         selectedGuildName: user.selectedGuildName,
         personality: user.personality || '',
         rules: user.rules || '',
-        information: user.information || ''
+        information: user.information || '',
+        websites: user.server?.websites.map(w => ({
+          url: w.url,
+          name: w.name || '',
+          markdown: w.scrapes[0]?.markdownContent || '',
+          scrapedAt: w.scrapes[0]?.scrapedAt?.toISOString() || ''
+        })) || []
       }))
     });
   } catch (error) {

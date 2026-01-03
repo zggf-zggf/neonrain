@@ -12,7 +12,13 @@ import {
   getSelectedGuild,
   saveSelectedGuild,
   removeSelectedGuild,
+  getServerWebsites,
+  addServerWebsite,
+  removeServerWebsite,
+  rescrapeWebsite,
+  getWebsiteStatus,
   AgentConfig,
+  Website,
 } from "@/lib/api";
 
 interface Guild {
@@ -65,6 +71,14 @@ export default function DashboardPage() {
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [loadingGuilds, setLoadingGuilds] = useState(false);
   const [savingServer, setSavingServer] = useState(false);
+
+  // Website state
+  const [websites, setWebsites] = useState<Website[]>([]);
+  const [loadingWebsites, setLoadingWebsites] = useState(false);
+  const [addingWebsite, setAddingWebsite] = useState(false);
+  const [newWebsiteUrl, setNewWebsiteUrl] = useState("");
+  const [newWebsiteName, setNewWebsiteName] = useState("");
+  const [scrapingWebsiteId, setScrapingWebsiteId] = useState<string | null>(null);
 
   useEffect(() => {
     // Wait for Clerk to be fully loaded before fetching data
@@ -199,6 +213,176 @@ export default function DashboardPage() {
   function cancelSelection() {
     setSelectingServer(false);
     setGuilds([]);
+  }
+
+  // Load websites when selectedGuild changes
+  useEffect(() => {
+    if (selectedGuild) {
+      loadWebsites();
+    } else {
+      setWebsites([]);
+    }
+  }, [selectedGuild?.id]);
+
+  async function loadWebsites() {
+    if (!selectedGuild) return;
+
+    setLoadingWebsites(true);
+    try {
+      const token = await getToken();
+      if (!token) return;
+
+      const result = await getServerWebsites(token, selectedGuild.id);
+      setWebsites(result.websites || []);
+    } catch (err: unknown) {
+      console.error("Failed to load websites:", err);
+    } finally {
+      setLoadingWebsites(false);
+    }
+  }
+
+  async function handleAddWebsite() {
+    if (!selectedGuild || !newWebsiteUrl.trim()) return;
+
+    setAddingWebsite(true);
+    setError("");
+
+    try {
+      const token = await getToken();
+      if (!token) return;
+
+      const result = await addServerWebsite(
+        token,
+        selectedGuild.id,
+        newWebsiteUrl.trim(),
+        newWebsiteName.trim() || undefined
+      );
+
+      const newWebsite = result.website;
+      setWebsites(prev => [...prev, newWebsite]);
+      setNewWebsiteUrl("");
+      setNewWebsiteName("");
+      setSuccess("Website added. Scraping in progress...");
+      setScrapingWebsiteId(newWebsite.id);
+
+      // Poll for initial scrape completion
+      const pollInterval = setInterval(async () => {
+        try {
+          const freshToken = await getToken();
+          if (!freshToken || !selectedGuild) {
+            clearInterval(pollInterval);
+            return;
+          }
+
+          const statusResult = await getWebsiteStatus(freshToken, selectedGuild.id, newWebsite.id);
+          const updatedWebsite = statusResult.website;
+
+          if (updatedWebsite.lastScrapeStatus !== 'pending') {
+            clearInterval(pollInterval);
+            setWebsites(prev => prev.map(w => w.id === newWebsite.id ? updatedWebsite : w));
+            setScrapingWebsiteId(null);
+            if (updatedWebsite.lastScrapeStatus === 'success') {
+              setSuccess("Website scraped successfully!");
+            } else {
+              setError("Initial scrape failed. Check the server logs.");
+            }
+            setTimeout(() => { setSuccess(""); setError(""); }, 3000);
+          }
+        } catch {
+          // Ignore polling errors
+        }
+      }, 2000);
+
+      // Stop polling after 60 seconds
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        if (scrapingWebsiteId === newWebsite.id) {
+          setScrapingWebsiteId(null);
+        }
+      }, 60000);
+
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to add website");
+    } finally {
+      setAddingWebsite(false);
+    }
+  }
+
+  async function handleRemoveWebsite(websiteId: string) {
+    if (!selectedGuild) return;
+
+    try {
+      const token = await getToken();
+      if (!token) return;
+
+      await removeServerWebsite(token, selectedGuild.id, websiteId);
+      setWebsites(websites.filter((w) => w.id !== websiteId));
+      setSuccess("Website removed");
+      setTimeout(() => setSuccess(""), 3000);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to remove website");
+    }
+  }
+
+  async function handleRescrape(websiteId: string) {
+    if (!selectedGuild) return;
+
+    const website = websites.find(w => w.id === websiteId);
+    if (!website) return;
+
+    const previousScrapedAt = website.lastScrapedAt;
+    setScrapingWebsiteId(websiteId);
+
+    try {
+      const token = await getToken();
+      if (!token) return;
+
+      await rescrapeWebsite(token, selectedGuild.id, websiteId);
+      setSuccess("Scraping in progress...");
+
+      // Poll for completion
+      const pollInterval = setInterval(async () => {
+        try {
+          const freshToken = await getToken();
+          if (!freshToken || !selectedGuild) {
+            clearInterval(pollInterval);
+            return;
+          }
+
+          const result = await getWebsiteStatus(freshToken, selectedGuild.id, websiteId);
+          const updatedWebsite = result.website;
+
+          // Check if scrape completed (timestamp changed or status changed from pending)
+          if (updatedWebsite.lastScrapedAt !== previousScrapedAt) {
+            clearInterval(pollInterval);
+            setWebsites(prev => prev.map(w => w.id === websiteId ? updatedWebsite : w));
+            setScrapingWebsiteId(null);
+            if (updatedWebsite.lastScrapeStatus === 'success') {
+              setSuccess("Scrape completed successfully!");
+            } else {
+              setError("Scrape failed. Check the server logs for details.");
+            }
+            setTimeout(() => { setSuccess(""); setError(""); }, 3000);
+          }
+        } catch {
+          // Ignore polling errors, will retry
+        }
+      }, 2000);
+
+      // Stop polling after 60 seconds
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        if (scrapingWebsiteId === websiteId) {
+          setScrapingWebsiteId(null);
+          setError("Scrape timed out. Check server logs.");
+          setTimeout(() => setError(""), 3000);
+        }
+      }, 60000);
+
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to start scrape");
+      setScrapingWebsiteId(null);
+    }
   }
 
   if (loading || !isAuthLoaded || !isUserLoaded) {
@@ -411,6 +595,107 @@ export default function DashboardPage() {
               </div>
             </div>
           </div>
+        </section>
+      )}
+
+      {/* Important Websites */}
+      {discordConnected && selectedGuild && (
+        <section className="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-6">
+          <h2 className="text-xl font-semibold text-white mb-2">
+            Important Websites
+          </h2>
+          <p className="text-gray-400 text-sm mb-4">
+            These websites are scraped daily and provided to HUMA as context for understanding your server.
+          </p>
+
+          {loadingWebsites ? (
+            <p className="text-gray-400">Loading websites...</p>
+          ) : (
+            <>
+              {/* Website list */}
+              {websites.length > 0 && (
+                <div className="space-y-3 mb-4">
+                  {websites.map((website) => (
+                    <div
+                      key={website.id}
+                      className="bg-gray-800 rounded-lg p-4 flex items-start justify-between"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-white font-medium truncate">
+                            {website.name || (() => {
+                              try {
+                                return new URL(website.url).hostname;
+                              } catch {
+                                return website.url;
+                              }
+                            })()}
+                          </span>
+                          {website.lastScrapeStatus === "success" && (
+                            <span className="w-2 h-2 bg-green-400 rounded-full flex-shrink-0" />
+                          )}
+                          {website.lastScrapeStatus === "error" && (
+                            <span className="w-2 h-2 bg-red-400 rounded-full flex-shrink-0" />
+                          )}
+                          {website.lastScrapeStatus === "pending" && (
+                            <span className="w-2 h-2 bg-yellow-400 rounded-full animate-pulse flex-shrink-0" />
+                          )}
+                        </div>
+                        <p className="text-gray-400 text-sm truncate">{website.url}</p>
+                        <p className="text-gray-500 text-xs mt-1">
+                          Last scraped: {formatTimeAgo(website.lastScrapedAt)}
+                          {website.contentSize > 0 &&
+                            ` · ${(website.contentSize / 1024).toFixed(1)} KB`}
+                        </p>
+                      </div>
+                      <div className="flex gap-2 ml-4 flex-shrink-0">
+                        <button
+                          onClick={() => handleRescrape(website.id)}
+                          disabled={scrapingWebsiteId === website.id}
+                          className="px-3 py-1 text-sm bg-gray-700 text-white rounded hover:bg-gray-600 transition disabled:opacity-50"
+                        >
+                          {scrapingWebsiteId === website.id ? "Scraping..." : "Rescrape"}
+                        </button>
+                        <button
+                          onClick={() => handleRemoveWebsite(website.id)}
+                          className="px-3 py-1 text-sm bg-red-600/20 text-red-400 rounded hover:bg-red-600/30 transition"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Add website form */}
+              <div className="bg-gray-800 rounded-lg p-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <input
+                    type="url"
+                    value={newWebsiteUrl}
+                    onChange={(e) => setNewWebsiteUrl(e.target.value)}
+                    placeholder="https://example.com"
+                    className="px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500 md:col-span-2"
+                  />
+                  <input
+                    type="text"
+                    value={newWebsiteName}
+                    onChange={(e) => setNewWebsiteName(e.target.value)}
+                    placeholder="Name (optional)"
+                    className="px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <button
+                  onClick={handleAddWebsite}
+                  disabled={addingWebsite || !newWebsiteUrl.trim()}
+                  className="mt-3 px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 transition disabled:opacity-50"
+                >
+                  {addingWebsite ? "Adding..." : "Add Website"}
+                </button>
+              </div>
+            </>
+          )}
         </section>
       )}
 

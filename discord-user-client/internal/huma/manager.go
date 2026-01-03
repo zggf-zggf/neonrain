@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mjacniacki/neonrain/discord-user-client/internal/history"
+	"github.com/mjacniacki/neonrain/discord-user-client/pkg/types"
 )
 
 // MonitoredChannel represents a channel the bot monitors
@@ -37,6 +38,7 @@ type GuildAgent struct {
 	personality string
 	rules       string
 	information string
+	websites    []types.WebsiteData
 
 	// Message queue for typing simulation
 	pendingMessage    *PendingMessage
@@ -62,6 +64,7 @@ type Manager struct {
 	personality string
 	rules       string
 	information string
+	websites    []types.WebsiteData
 }
 
 // NewManager creates a new HUMA manager
@@ -93,6 +96,13 @@ func (m *Manager) SetConfig(personality, rules, information string) {
 	m.personality = personality
 	m.rules = rules
 	m.information = information
+}
+
+// SetWebsites sets the websites for context
+func (m *Manager) SetWebsites(websites []types.WebsiteData) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.websites = websites
 }
 
 // GetOrCreateAgent gets an existing agent for a guild or creates a new one
@@ -131,6 +141,7 @@ func (m *Manager) GetOrCreateAgent(guildID, guildName string) (*GuildAgent, erro
 		personality: m.personality,
 		rules:       m.rules,
 		information: m.information,
+		websites:    m.websites,
 		cancelChan:  make(chan struct{}),
 	}
 
@@ -259,11 +270,20 @@ You CAN see:
 - List of all channels you monitor (monitoredChannels array)
 - Recent messages from other monitored channels (in monitoredChannels[].recentMessages)
 - Guild/server name
+- Important websites content (importantWebsites array, if provided)
 
 You CANNOT see:
 - Private/DM conversations
 - Channels not in your monitoredChannels list
-- User's private information`, botName, guildName)
+- User's private information
+
+## Important Websites
+If the "importantWebsites" field is present in the context, it contains scraped content from websites
+the server owner marked as important. Use this information to:
+- Answer questions about the server's topic, products, or community
+- Reference documentation or changelogs when relevant
+- Provide accurate information based on the scraped content
+Each website includes: name, url, scrapedAt (when it was last updated), and content (the markdown)`, botName, guildName)
 
 	// Add user's custom rules to instructions
 	if m.rules != "" {
@@ -382,6 +402,20 @@ func (a *GuildAgent) buildContext(currentChannelID, currentChannelName, lastAuth
 	// Add user-provided information to context (dynamic context data)
 	if a.information != "" {
 		context["userInformation"] = a.information
+	}
+
+	// Add important websites to context
+	if len(a.websites) > 0 {
+		var websiteContexts []map[string]interface{}
+		for _, w := range a.websites {
+			websiteContexts = append(websiteContexts, map[string]interface{}{
+				"name":      w.Name,
+				"url":       w.URL,
+				"scrapedAt": w.ScrapedAt,
+				"content":   w.Markdown,
+			})
+		}
+		context["importantWebsites"] = websiteContexts
 	}
 
 	return context
@@ -534,12 +568,13 @@ func (a *GuildAgent) handleCancelToolCall(toolCallID, reason string) {
 }
 
 // UpdateConfig updates the agent configuration
-func (a *GuildAgent) UpdateConfig(sender MessageSender, history *history.MessageHistoryManager, personality, rules, information string) {
+func (a *GuildAgent) UpdateConfig(sender MessageSender, history *history.MessageHistoryManager, personality, rules, information string, websites []types.WebsiteData) {
 	a.sender = sender
 	a.history = history
 	a.personality = personality
 	a.rules = rules
 	a.information = information
+	a.websites = websites
 }
 
 // calculateTypingDelay calculates delay for 90 WPM typing speed

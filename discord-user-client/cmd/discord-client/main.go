@@ -52,9 +52,11 @@ func main() {
 	log.Printf("HUMA API: https://api.humalike.tech")
 	log.Printf("Poll interval: %v", pollInterval)
 
-	// Initialize HTTP server (will be updated with client later)
-	var currentClient *client.DiscordClient
-	httpServer := server.NewServer(httpPort, nil)
+	// Initialize client manager for multi-user support
+	clientManager := client.NewClientManager(humaManager, backendClient)
+
+	// Initialize HTTP server
+	httpServer := server.NewServer(httpPort, clientManager)
 	httpServer.Start()
 
 	ticker := time.NewTicker(pollInterval)
@@ -69,22 +71,21 @@ func main() {
 		configs, err := backendClient.FetchDiscordTokens()
 		if err != nil {
 			log.Printf("Error fetching tokens: %v", err)
-			log.Println("Waiting for Discord account to be connected...")
+			log.Println("Waiting for Discord accounts to be connected...")
 		} else if len(configs) > 0 {
-			log.Printf("Found %d Discord token(s), connecting with the first one", len(configs))
-			currentClient = client.NewDiscordClient(humaManager, backendClient)
-			if err := currentClient.Connect(configs[0]); err != nil {
-				log.Printf("Error connecting: %v", err)
-				currentClient = nil
-			} else {
-				httpServer.UpdateClient(currentClient)
+			// Count unique tokens
+			uniqueTokens := make(map[string]bool)
+			for _, c := range configs {
+				uniqueTokens[c.Token] = true
 			}
+			log.Printf("Found %d user config(s) with %d unique Discord token(s)", len(configs), len(uniqueTokens))
+			clientManager.SyncConfigs(configs)
 		} else {
-			log.Println("No Discord tokens found, waiting for user to connect Discord account...")
+			log.Println("No Discord tokens found, waiting for users to connect Discord accounts...")
 		}
 	}()
 
-	// Poll for token changes
+	// Poll for config changes
 	for {
 		select {
 		case <-ticker.C:
@@ -94,64 +95,16 @@ func main() {
 				continue
 			}
 
-			// No tokens found
-			if len(configs) == 0 {
-				if currentClient != nil {
-					log.Println("No tokens found in database, disconnecting...")
-					currentClient.Disconnect()
-					currentClient = nil
-					httpServer.UpdateClient(nil)
-				}
-				continue
-			}
-
-			// Token found
-			currentConfig := configs[0]
-
-			// If we don't have a client yet, connect
-			if currentClient == nil {
-				log.Printf("New Discord account detected (user: %s), connecting...", currentConfig.Email)
-				currentClient = client.NewDiscordClient(humaManager, backendClient)
-				if err := currentClient.Connect(currentConfig); err != nil {
-					log.Printf("Error connecting: %v", err)
-					currentClient = nil
-				} else {
-					httpServer.UpdateClient(currentClient)
-				}
-				continue
-			}
-
-			// If token changed, reconnect
-			if currentClient.GetToken() != currentConfig.Token {
-				log.Printf("Discord token changed (user: %s), reconnecting...", currentConfig.Email)
-				currentClient.Disconnect()
-				currentClient = client.NewDiscordClient(humaManager, backendClient)
-				if err := currentClient.Connect(currentConfig); err != nil {
-					log.Printf("Error connecting: %v", err)
-					currentClient = nil
-					httpServer.UpdateClient(nil)
-				} else {
-					httpServer.UpdateClient(currentClient)
-				}
-				continue
-			}
-
-			// Update selected guild and config fields if they changed
-			guildChanged := currentClient.GetSelectedGuildID() != currentConfig.SelectedGuildID
-			configChanged := currentClient.GetPersonality() != currentConfig.Personality ||
-				currentClient.GetRules() != currentConfig.Rules ||
-				currentClient.GetInformation() != currentConfig.Information
-
-			if guildChanged || configChanged {
-				log.Printf("Configuration changed, updating...")
-				currentClient.UpdateConfig(currentConfig)
-			}
+			// Sync all configs with the client manager
+			// This handles:
+			// - New tokens (creates new connections)
+			// - Removed tokens (disconnects)
+			// - Updated configs (updates guild monitoring)
+			clientManager.SyncConfigs(configs)
 
 		case <-sigChan:
 			log.Println("\nShutting down...")
-			if currentClient != nil {
-				currentClient.Disconnect()
-			}
+			clientManager.DisconnectAll()
 			return
 		}
 	}

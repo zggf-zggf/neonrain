@@ -11,7 +11,7 @@ export default async function SignInPage() {
 
   return (
     <div className="min-h-[80vh] flex items-center justify-center">
-      <SignIn />
+      <SignIn path="/sign-in" fallbackRedirectUrl="/dashboard" />
     </div>
   );
 }

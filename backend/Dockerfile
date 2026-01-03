@@ -1,7 +1,7 @@
 FROM node:20-alpine
 
 # Install OpenSSL for Prisma and Doppler CLI
-RUN apk add --no-cache openssl openssl-dev curl bash && \
+RUN apk add --no-cache openssl openssl-dev curl bash gnupg && \
     curl -Ls https://cli.doppler.com/install.sh | sh
 
 WORKDIR /app

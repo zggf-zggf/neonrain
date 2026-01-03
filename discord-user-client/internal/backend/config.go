@@ -75,6 +75,7 @@ func (c *Client) FetchDiscordTokens() ([]types.UserConfig, error) {
 				Personality:       t.Personality,
 				Rules:             t.Rules,
 				Information:       t.Information,
+				Websites:          t.Websites,
 			})
 		}
 	}

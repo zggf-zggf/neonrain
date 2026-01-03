@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/mjacniacki/neonrain/discord-user-client/internal/backend"
@@ -11,6 +12,11 @@ import (
 	"github.com/mjacniacki/neonrain/discord-user-client/internal/huma"
 	"github.com/mjacniacki/neonrain/discord-user-client/pkg/types"
 )
+
+// ConfigProvider provides config for a specific guild
+type ConfigProvider interface {
+	GetConfigForGuild(guildID string) (types.UserConfig, bool)
+}
 
 // DiscordClient manages Discord connection and message processing
 type DiscordClient struct {
@@ -24,18 +30,36 @@ type DiscordClient struct {
 	personality       string
 	rules             string
 	information       string
+	websites          []types.WebsiteData
 	historyManager    *history.MessageHistoryManager
 	botUsername       string
 	humaManager       *huma.Manager
 	backendClient     *backend.Client
+
+	// Multi-guild support
+	monitoredGuilds map[string]bool // guildID -> true
+	configProvider  ConfigProvider
+	mu              sync.RWMutex
 }
 
-// NewDiscordClient creates a new Discord client
+// NewDiscordClient creates a new Discord client (single-guild mode for backward compatibility)
 func NewDiscordClient(humaManager *huma.Manager, backendClient *backend.Client) *DiscordClient {
 	return &DiscordClient{
-		historyManager: history.NewMessageHistoryManager(),
-		humaManager:    humaManager,
-		backendClient:  backendClient,
+		historyManager:  history.NewMessageHistoryManager(),
+		humaManager:     humaManager,
+		backendClient:   backendClient,
+		monitoredGuilds: make(map[string]bool),
+	}
+}
+
+// NewMultiGuildDiscordClient creates a new Discord client with multi-guild support
+func NewMultiGuildDiscordClient(humaManager *huma.Manager, backendClient *backend.Client, configProvider ConfigProvider) *DiscordClient {
+	return &DiscordClient{
+		historyManager:  history.NewMessageHistoryManager(),
+		humaManager:     humaManager,
+		backendClient:   backendClient,
+		monitoredGuilds: make(map[string]bool),
+		configProvider:  configProvider,
 	}
 }
 
@@ -49,6 +73,7 @@ func (dc *DiscordClient) Connect(config types.UserConfig) error {
 	dc.personality = config.Personality
 	dc.rules = config.Rules
 	dc.information = config.Information
+	dc.websites = config.Websites
 	dc.readyHandled = false
 
 	// Log configuration
@@ -81,6 +106,7 @@ func (dc *DiscordClient) Connect(config types.UserConfig) error {
 						dc.humaManager.SetMessageSender(dc)
 						dc.humaManager.SetHistoryManager(dc.historyManager)
 						dc.humaManager.SetConfig(dc.personality, dc.rules, dc.information)
+						dc.humaManager.SetWebsites(dc.websites)
 					}
 
 					log.Printf("✓ Connected as: %s (for user: %s)", evt.User.Username, dc.userEmail)
@@ -148,10 +174,12 @@ func (dc *DiscordClient) UpdateConfig(config types.UserConfig) {
 	dc.personality = config.Personality
 	dc.rules = config.Rules
 	dc.information = config.Information
+	dc.websites = config.Websites
 
 	// Update HUMA manager with new config
 	if dc.humaManager != nil {
 		dc.humaManager.SetConfig(dc.personality, dc.rules, dc.information)
+		dc.humaManager.SetWebsites(dc.websites)
 	}
 
 	if dc.selectedGuildID != "" {
@@ -161,12 +189,55 @@ func (dc *DiscordClient) UpdateConfig(config types.UserConfig) {
 	}
 }
 
-// isFromSelectedGuild checks if a message is from the selected guild
+// isFromSelectedGuild checks if a message is from a monitored guild
 func (dc *DiscordClient) isFromSelectedGuild(guildID string) bool {
+	dc.mu.RLock()
+	defer dc.mu.RUnlock()
+
+	// Multi-guild mode: check if guild is in monitored list
+	if len(dc.monitoredGuilds) > 0 {
+		return dc.monitoredGuilds[guildID]
+	}
+
+	// Single-guild mode (backward compatibility)
 	if dc.selectedGuildID == "" {
 		return false
 	}
 	return guildID == dc.selectedGuildID
+}
+
+// UpdateMonitoredGuilds updates the list of guilds this client monitors
+func (dc *DiscordClient) UpdateMonitoredGuilds(guildIDs []string) {
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+
+	// Check if anything changed
+	if len(guildIDs) == len(dc.monitoredGuilds) {
+		allMatch := true
+		for _, guildID := range guildIDs {
+			if !dc.monitoredGuilds[guildID] {
+				allMatch = false
+				break
+			}
+		}
+		if allMatch {
+			return // No changes
+		}
+	}
+
+	// Clear old guilds
+	dc.monitoredGuilds = make(map[string]bool)
+
+	// Add new guilds
+	for _, guildID := range guildIDs {
+		dc.monitoredGuilds[guildID] = true
+	}
+
+	if len(guildIDs) > 0 {
+		log.Printf("[Discord] Now monitoring %d guild(s)", len(guildIDs))
+	} else {
+		log.Printf("[Discord] No guilds to monitor")
+	}
 }
 
 // processMessageWithHUMA processes a Discord message using HUMA
@@ -181,8 +252,27 @@ func (dc *DiscordClient) processMessageWithHUMA(msg *discordgo.MessageCreate) {
 		channelName = channel.Name
 	}
 
-	// Use stored guild name or look it up
-	guildName := dc.selectedGuildName
+	// Get guild-specific config if available (multi-guild mode)
+	var personality, rules, information string
+	var websites []types.WebsiteData
+	var guildName string
+	var userID string
+
+	if dc.configProvider != nil {
+		if config, exists := dc.configProvider.GetConfigForGuild(guildID); exists {
+			guildName = config.SelectedGuildName
+			personality = config.Personality
+			rules = config.Rules
+			information = config.Information
+			websites = config.Websites
+			userID = config.UserID
+		}
+	}
+
+	// Fallback to stored values (single-guild mode)
+	if guildName == "" {
+		guildName = dc.selectedGuildName
+	}
 	if guildName == "" {
 		guild, err := dc.session.Guild(guildID)
 		if err == nil && guild != nil {
@@ -191,13 +281,28 @@ func (dc *DiscordClient) processMessageWithHUMA(msg *discordgo.MessageCreate) {
 			guildName = guildID
 		}
 	}
+	if personality == "" {
+		personality = dc.personality
+	}
+	if rules == "" {
+		rules = dc.rules
+	}
+	if information == "" {
+		information = dc.information
+	}
+	if len(websites) == 0 {
+		websites = dc.websites
+	}
+	if userID == "" {
+		userID = dc.userID
+	}
 
 	log.Printf("[HUMA] Message from #%s in %s - %s: %s", channelName, guildName, msg.Author.Username, msg.Content)
 
 	// Report message received to backend
-	if dc.backendClient != nil && dc.userID != "" {
+	if dc.backendClient != nil && userID != "" {
 		go func() {
-			if err := dc.backendClient.ReportStats(dc.userID, "message_received"); err != nil {
+			if err := dc.backendClient.ReportStats(userID, "message_received"); err != nil {
 				log.Printf("[Stats] Failed to report message_received: %v", err)
 			}
 		}()
@@ -226,8 +331,8 @@ func (dc *DiscordClient) processMessageWithHUMA(msg *discordgo.MessageCreate) {
 		return
 	}
 
-	// Update agent config
-	agent.UpdateConfig(dc, dc.historyManager, dc.personality, dc.rules, dc.information)
+	// Update agent config with guild-specific settings
+	agent.UpdateConfig(dc, dc.historyManager, personality, rules, information, websites)
 
 	// Send message event to HUMA
 	err = agent.SendNewMessage(
@@ -256,11 +361,26 @@ func (dc *DiscordClient) SendMessage(channelID, content string) error {
 
 	log.Printf("[Discord] Message sent to channel %s", channelID)
 
-	// Report message sent to backend
-	if dc.backendClient != nil && dc.userID != "" {
+	// Report message sent to backend - find the correct user for this channel's guild
+	if dc.backendClient != nil {
 		go func() {
-			if err := dc.backendClient.ReportStats(dc.userID, "message_sent"); err != nil {
-				log.Printf("[Stats] Failed to report message_sent: %v", err)
+			// Determine which user to report stats for
+			userID := dc.userID // fallback to default
+
+			// In multi-guild mode, look up the user from the channel's guild
+			if dc.configProvider != nil {
+				channel, err := dc.session.Channel(channelID)
+				if err == nil && channel != nil {
+					if config, exists := dc.configProvider.GetConfigForGuild(channel.GuildID); exists {
+						userID = config.UserID
+					}
+				}
+			}
+
+			if userID != "" {
+				if err := dc.backendClient.ReportStats(userID, "message_sent"); err != nil {
+					log.Printf("[Stats] Failed to report message_sent: %v", err)
+				}
 			}
 		}()
 	}
@@ -328,6 +448,11 @@ func (dc *DiscordClient) GetRules() string {
 // GetInformation returns the information config
 func (dc *DiscordClient) GetInformation() string {
 	return dc.information
+}
+
+// GetWebsites returns the websites configuration
+func (dc *DiscordClient) GetWebsites() []types.WebsiteData {
+	return dc.websites
 }
 
 // GetMonitoredChannelsForGuild returns all text channels in the selected guild

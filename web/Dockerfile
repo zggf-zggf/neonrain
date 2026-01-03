@@ -13,7 +13,7 @@ FROM base AS builder
 WORKDIR /app
 
 # Install Doppler CLI for build-time secrets (NEXT_PUBLIC_* vars)
-RUN apk add --no-cache curl bash && \
+RUN apk add --no-cache curl bash gnupg && \
     curl -Ls https://cli.doppler.com/install.sh | sh
 
 COPY --from=deps /app/node_modules ./node_modules

@@ -2,7 +2,8 @@ import express, { Request, Response } from 'express';
 import cors from 'cors';
 import { clerkMiddleware } from '@clerk/express';
 import discordRoutes from './routes/discord.js';
-import { prisma } from './lib/prisma.js';
+import serverRoutes from './routes/servers.js';
+import { scheduler, tokenCleanupJob, websiteScrapeJob } from './jobs/index.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -30,6 +31,7 @@ app.use((req, res, next) => {
 
 // Routes
 app.use('/api/discord', discordRoutes);
+app.use('/api/servers', serverRoutes);
 
 // Health check endpoint
 app.get('/health', (req: Request, res: Response) => {
@@ -62,22 +64,10 @@ app.get('/api/test', (req: Request, res: Response) => {
   });
 });
 
-// Cleanup expired pending tokens every 5 minutes
-setInterval(async () => {
-  try {
-    const deleted = await prisma.pendingDiscordToken.deleteMany({
-      where: {
-        expiresAt: { lt: new Date() },
-        claimed: false
-      }
-    });
-    if (deleted.count > 0) {
-      console.log(`[Cleanup] Deleted ${deleted.count} expired pending tokens`);
-    }
-  } catch (error) {
-    console.error('[Cleanup] Error deleting expired tokens:', error);
-  }
-}, 5 * 60 * 1000);
+// Register and start background jobs
+scheduler.register(tokenCleanupJob);
+scheduler.register(websiteScrapeJob);
+scheduler.start();
 
 // Start server
 app.listen(PORT, () => {

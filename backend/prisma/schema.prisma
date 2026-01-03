@@ -18,6 +18,10 @@ model User {
   selectedGuildId   String?  @map("selected_guild_id")
   selectedGuildName String?  @map("selected_guild_name")
 
+  // Server relation (for website scraping feature)
+  serverId          String?  @map("server_id")
+  server            Server?  @relation(fields: [serverId], references: [id])
+
   // Agent configuration
   personality       String?  @default("") @map("personality")
   rules             String?  @default("") @map("rules")
@@ -33,6 +37,53 @@ model User {
   messagesReceivedCount Int       @default(0) @map("messages_received_count")
 
   @@map("users")
+}
+
+model Server {
+  id        String   @id @default(uuid())
+  guildId   String   @unique @map("guild_id")
+  guildName String   @map("guild_name")
+
+  websites  ServerWebsite[]
+  users     User[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("servers")
+}
+
+model ServerWebsite {
+  id        String   @id @default(uuid())
+  serverId  String   @map("server_id")
+  server    Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  url       String
+  name      String?
+
+  scrapes   WebsiteScrape[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([serverId, url])
+  @@map("server_websites")
+}
+
+model WebsiteScrape {
+  id              String   @id @default(uuid())
+  websiteId       String   @map("website_id")
+  website         ServerWebsite @relation(fields: [websiteId], references: [id], onDelete: Cascade)
+
+  markdownContent String   @map("markdown_content") @db.Text
+  contentLength   Int      @map("content_length")
+  truncated       Boolean  @default(false)
+
+  statusCode      Int?     @map("status_code")
+  errorMessage    String?  @map("error_message")
+  scrapedAt       DateTime @default(now()) @map("scraped_at")
+
+  @@map("website_scrapes")
 }
 
 model PendingDiscordToken {
