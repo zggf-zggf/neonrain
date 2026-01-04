@@ -167,17 +167,6 @@ func (m *ClientManager) DisconnectAll() {
 	m.guildConfigs = make(map[string]types.UserConfig)
 }
 
-// GetFirstClient returns the first available client (for backward compatibility)
-func (m *ClientManager) GetFirstClient() *DiscordClient {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	for _, client := range m.clients {
-		return client
-	}
-	return nil
-}
-
 // GetClientByToken returns the client for a specific Discord token
 func (m *ClientManager) GetClientByToken(token string) *DiscordClient {
 	m.mu.RLock()

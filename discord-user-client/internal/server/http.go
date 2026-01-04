@@ -47,20 +47,17 @@ func (s *Server) handleGetGuilds(w http.ResponseWriter, r *http.Request) {
 
 	// Get client for the specific user's Discord token
 	// The backend passes X-Discord-Token header to identify which user's guilds to fetch
-	var discordClient *client.DiscordClient
-
 	token := r.Header.Get("X-Discord-Token")
-	if token != "" {
-		discordClient = s.clientManager.GetClientByToken(token)
+	if token == "" {
+		// SECURITY: Token header is required to prevent cross-user data leakage
+		http.Error(w, `{"error":"X-Discord-Token header is required"}`, http.StatusBadRequest)
+		return
 	}
 
-	// Fallback to first client for backward compatibility
-	if discordClient == nil {
-		discordClient = s.clientManager.GetFirstClient()
-	}
-
+	discordClient := s.clientManager.GetClientByToken(token)
 	if discordClient == nil || discordClient.GetSession() == nil {
-		http.Error(w, `{"error":"No Discord session active"}`, http.StatusServiceUnavailable)
+		// Token provided but no active client for this token
+		http.Error(w, `{"error":"No Discord session active for this token"}`, http.StatusServiceUnavailable)
 		return
 	}
 
@@ -94,19 +91,17 @@ func (s *Server) handleGetChannels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get client for the specific user's Discord token
-	var discordClient *client.DiscordClient
-
 	token := r.Header.Get("X-Discord-Token")
-	if token != "" {
-		discordClient = s.clientManager.GetClientByToken(token)
+	if token == "" {
+		// SECURITY: Token header is required to prevent cross-user data leakage
+		http.Error(w, `{"error":"X-Discord-Token header is required"}`, http.StatusBadRequest)
+		return
 	}
 
-	if discordClient == nil {
-		discordClient = s.clientManager.GetFirstClient()
-	}
-
+	discordClient := s.clientManager.GetClientByToken(token)
 	if discordClient == nil || discordClient.GetSession() == nil {
-		http.Error(w, `{"error":"No Discord session active"}`, http.StatusServiceUnavailable)
+		// Token provided but no active client for this token
+		http.Error(w, `{"error":"No Discord session active for this token"}`, http.StatusServiceUnavailable)
 		return
 	}
 
