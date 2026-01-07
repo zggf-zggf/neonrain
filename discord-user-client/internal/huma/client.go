@@ -305,11 +305,12 @@ func (c *Client) SendToolCanceled(toolCallID, reason string) error {
 	c.mu.RUnlock()
 
 	content := ToolResultContent{
-		Type:       "tool-result",
-		ToolCallID: toolCallID,
-		Status:     "canceled",
-		Success:    false,
-		Error:      reason,
+		Type:                    "tool-result",
+		ToolCallID:              toolCallID,
+		Status:                  "canceled",
+		Success:                 false,
+		Error:                   reason,
+		SkipImmediateProcessing: true,
 	}
 
 	event := HumaEvent{
