@@ -56,12 +56,14 @@ type ContextUpdateContent struct {
 
 // ToolResultContent is the content for tool result events
 type ToolResultContent struct {
-	Type       string      `json:"type"`
-	ToolCallID string      `json:"toolCallId"`
-	Status     string      `json:"status"` // "completed" or "canceled"
-	Success    bool        `json:"success"`
-	Result     interface{} `json:"result,omitempty"`
-	Error      string      `json:"error,omitempty"`
+	Type                    string                 `json:"type"`
+	ToolCallID              string                 `json:"toolCallId"`
+	Status                  string                 `json:"status,omitempty"` // "completed" or "canceled"
+	Success                 bool                   `json:"success"`
+	Result                  interface{}            `json:"result,omitempty"`
+	Error                   string                 `json:"error,omitempty"`
+	SkipImmediateProcessing bool                   `json:"skipImmediateProcessing,omitempty"`
+	Context                 map[string]interface{} `json:"context,omitempty"`
 }
 
 // ServerEvent represents events received from HUMA server

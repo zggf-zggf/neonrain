@@ -234,13 +234,19 @@ func (c *Client) SendContextUpdate(eventName, description string, context map[st
 	return nil
 }
 
-// SendToolResult sends a tool result back to HUMA as a context update
-func (c *Client) SendToolResult(toolCallID string, success bool, result interface{}, errMsg string) error {
-	return c.SendToolResultWithContext(toolCallID, success, result, errMsg, nil)
+// ToolResultOptions contains optional parameters for SendToolResult
+type ToolResultOptions struct {
+	SkipImmediateProcessing bool
+	Context                 map[string]interface{}
 }
 
-// SendToolResultWithContext sends a tool result with additional context to HUMA
-func (c *Client) SendToolResultWithContext(toolCallID string, success bool, result interface{}, errMsg string, extraContext map[string]interface{}) error {
+// SendToolResult sends a tool result back to HUMA
+func (c *Client) SendToolResult(toolCallID string, success bool, result interface{}, errMsg string) error {
+	return c.SendToolResultWithOptions(toolCallID, success, result, errMsg, nil)
+}
+
+// SendToolResultWithOptions sends a tool result with additional options to HUMA
+func (c *Client) SendToolResultWithOptions(toolCallID string, success bool, result interface{}, errMsg string, options *ToolResultOptions) error {
 	c.mu.RLock()
 	if !c.connected || c.conn == nil {
 		c.mu.RUnlock()
@@ -248,35 +254,30 @@ func (c *Client) SendToolResultWithContext(toolCallID string, success bool, resu
 	}
 	c.mu.RUnlock()
 
-	// Build context with tool result
-	context := map[string]interface{}{
-		"toolCallId": toolCallID,
-		"status":     "completed",
-		"success":    success,
+	content := ToolResultContent{
+		Type:       "tool-result",
+		ToolCallID: toolCallID,
+		Success:    success,
 	}
 
-	var description string
 	if success {
-		context["result"] = result
-		description = fmt.Sprintf("Tool call %s completed successfully", toolCallID)
+		content.Result = result
 	} else {
-		context["error"] = errMsg
-		description = fmt.Sprintf("Tool call %s failed: %s", toolCallID, errMsg)
+		content.Error = errMsg
 	}
 
-	// Merge extra context if provided
-	for k, v := range extraContext {
-		context[k] = v
+	if options != nil {
+		if options.SkipImmediateProcessing {
+			content.SkipImmediateProcessing = true
+		}
+		if options.Context != nil {
+			content.Context = options.Context
+		}
 	}
 
-	// Send as context update with HUMA's expected format
 	event := HumaEvent{
-		Type: "huma-0.1-event",
-		Content: ContextUpdateContent{
-			Name:        "tool-result",
-			Context:     context,
-			Description: description,
-		},
+		Type:    "huma-0.1-event",
+		Content: content,
 	}
 
 	jsonData, err := json.Marshal([]interface{}{"message", event})
@@ -303,20 +304,17 @@ func (c *Client) SendToolCanceled(toolCallID, reason string) error {
 	}
 	c.mu.RUnlock()
 
-	context := map[string]interface{}{
-		"toolCallId": toolCallID,
-		"status":     "canceled",
-		"success":    false,
-		"error":      reason,
+	content := ToolResultContent{
+		Type:       "tool-result",
+		ToolCallID: toolCallID,
+		Status:     "canceled",
+		Success:    false,
+		Error:      reason,
 	}
 
 	event := HumaEvent{
-		Type: "huma-0.1-event",
-		Content: ContextUpdateContent{
-			Name:        "tool-result",
-			Context:     context,
-			Description: fmt.Sprintf("Tool call %s was canceled: %s", toolCallID, reason),
-		},
+		Type:    "huma-0.1-event",
+		Content: content,
 	}
 
 	jsonData, err := json.Marshal([]interface{}{"message", event})

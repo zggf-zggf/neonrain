@@ -674,11 +674,12 @@ func (a *GuildAgent) processMessageWithTyping(toolCallID, channelID, message str
 
 			// Build updated conversation history including the new bot message
 			updatedHistory := a.buildUpdatedConversationHistory(channelID, message)
-			extraContext := map[string]interface{}{
-				"conversationHistory": updatedHistory,
-			}
-
-			a.Client.SendToolResultWithContext(toolCallID, true, "Message sent successfully", "", extraContext)
+			a.Client.SendToolResultWithOptions(toolCallID, true, "Message sent successfully", "", &ToolResultOptions{
+				SkipImmediateProcessing: true,
+				Context: map[string]interface{}{
+					"conversationHistory": updatedHistory,
+				},
+			})
 			return
 
 		case <-typingTicker.C:

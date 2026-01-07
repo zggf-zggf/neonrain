@@ -257,7 +257,8 @@ Use send_message to respond to the user. Only respond when you have something me
       const updatedHistory = this.buildUpdatedHistoryString(message);
 
       this.client.sendToolResult(toolCallId, true, 'Message sent', undefined, {
-        conversationHistory: updatedHistory,
+        skipImmediateProcessing: true,
+        context: { conversationHistory: updatedHistory },
       });
       this.pendingResponse = null;
     }, delay);

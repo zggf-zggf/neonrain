@@ -153,7 +153,10 @@ export class HumaClient {
     success: boolean,
     result?: unknown,
     error?: string,
-    context?: Record<string, unknown>
+    options?: {
+      skipImmediateProcessing?: boolean;
+      context?: Record<string, unknown>;
+    }
   ): void {
     if (!this.isConnected() || !this.socket) {
       throw new Error('Not connected');
@@ -162,7 +165,6 @@ export class HumaClient {
     const content: ToolResultContent = {
       type: 'tool-result',
       toolCallId,
-      status: 'completed',
       success,
     };
 
@@ -172,8 +174,12 @@ export class HumaClient {
       content.error = error;
     }
 
-    if (context) {
-      content.context = context;
+    if (options?.skipImmediateProcessing) {
+      content.skipImmediateProcessing = true;
+    }
+
+    if (options?.context) {
+      content.context = options.context;
     }
 
     const event: HumaEvent = {

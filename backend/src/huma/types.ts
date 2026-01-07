@@ -50,10 +50,11 @@ export interface ContextUpdateContent {
 export interface ToolResultContent {
   type: 'tool-result';
   toolCallId: string;
-  status: 'completed' | 'canceled';
+  status?: 'completed' | 'canceled';
   success: boolean;
   result?: unknown;
   error?: string;
+  skipImmediateProcessing?: boolean;
   context?: Record<string, unknown>;
 }
 
