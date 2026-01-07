@@ -11,6 +11,32 @@ import (
 	"github.com/mjacniacki/neonrain/discord-user-client/pkg/types"
 )
 
+// internalRules contains system rules that are always passed to HUMA
+// These are not visible to users but help guide agent behavior
+const internalRules = `## Environment Description
+You are inside a Discord server with multiple channels and users. Most messages are NOT directed at you. Your default behavior is to STAY SILENT.
+
+## When to Respond (ONLY these situations)
+You may ONLY use the send_message tool if ONE of these conditions is met:
+1. **Support tickets** - User is asking for help in a support channel or ticket
+2. **Server/product questions** - User asks a factual question about the server, its product, or service that you can answer
+3. **Direct mention** - You are explicitly mentioned via @mention OR someone uses your name directly
+4. **Rule violations** - Someone is breaking server rules, being aggressive, toxic, or harmful towards others
+
+## When to Stay Silent (DEFAULT)
+In ALL other situations, do NOT respond. This includes:
+- Users chatting with each other
+- Messages addressing other users by name (e.g., "Hey Kuba" when you're not Kuba)
+- General banter that doesn't involve you
+- Messages where you're unsure if you're being addressed
+- NEVER respond just to clarify "that wasn't for me" - just stay silent
+
+## Important
+- When in doubt, STAY SILENT
+- If a message mentions another user's name, it's probably not for you
+- Do not insert yourself into conversations between humans
+- Avoid using precise nicknames of users. For example if user ID is NightSlayer_6767 you can reference him just by "slayer" or use Discord mentions`
+
 // MonitoredChannel represents a channel the bot monitors
 type MonitoredChannel struct {
 	ID   string
@@ -236,20 +262,22 @@ To assist community members and contribute positively to conversations`, botName
 	instructions := fmt.Sprintf(`## Your Role
 You are %s, participating in Discord conversations in the server "%s". Monitor conversations and respond when appropriate.
 
+%s
+
 ## Understanding Context
 
 IMPORTANT: When you receive a new-message event, you will see:
-- "newMessage": The message that was just sent (author and content)
 - "currentChannel": The channel where the message was sent, including:
   - "id": Channel ID
   - "name": Channel name (e.g., "general")
   - "conversationHistory": Full history of the last 50 messages in format "[timestamp] author: message"
+  - The NEW message that triggered this event is always the LAST message in conversationHistory
 - "monitoredChannels": Array of ALL channels you have access to in this server, each with:
   - "id": Channel ID
   - "name": Channel name
   - "recentMessages": (optional) Last 5 messages from that channel if you've seen activity there
 
-ALWAYS read the currentChannel.conversationHistory to understand what was discussed before responding.
+ALWAYS read the currentChannel.conversationHistory to understand what was discussed. The last message is the one you're responding to.
 You can also check monitoredChannels to see what channels exist and any recent activity in other channels.
 
 ## Rules
@@ -305,8 +333,7 @@ You can also check monitoredChannels to see what channels exist and any recent a
 
 ## Information Visibility
 You CAN see:
-- The new message that was just sent (newMessage field)
-- Full conversation history of current channel (currentChannel.conversationHistory - READ THIS)
+- Full conversation history of current channel (currentChannel.conversationHistory - the last message is the new one)
 - List of ALL channels in the server (allChannels array with id, name, and type)
 - Recent messages from monitored channels (in monitoredChannels[].recentMessages)
 - Guild/server name
@@ -332,7 +359,7 @@ The context may include these fields that can be updated live by the server owne
 - "customRules": Additional rules you MUST follow (takes priority over base rules)
 - "customPersonality": Additional personality traits to embody
 - "userInformation": Custom information about the server/community
-Always check these fields and follow any instructions in customRules strictly.`, botName, guildName)
+Always check these fields and follow any instructions in customRules strictly.`, botName, guildName, internalRules)
 
 	// Add user's custom rules to instructions
 	if m.rules != "" {
@@ -390,7 +417,7 @@ Always check these fields and follow any instructions in customRules strictly.`,
 // SendNewMessage sends a new message event to HUMA
 func (a *GuildAgent) SendNewMessage(channelID, channelName, authorID, authorName, content, messageID string) error {
 	// Build context with current state
-	context := a.buildContext(channelID, channelName, authorName, content)
+	context := a.buildContext(channelID, channelName)
 
 	description := fmt.Sprintf("User %s sent a new message in channel #%s: \"%s\". Review the conversationHistory field to see the full conversation context before responding.",
 		authorName, channelName, truncateString(content, 100))
@@ -399,7 +426,7 @@ func (a *GuildAgent) SendNewMessage(channelID, channelName, authorID, authorName
 }
 
 // buildContext builds the context object for HUMA
-func (a *GuildAgent) buildContext(currentChannelID, currentChannelName, lastAuthor, lastMessage string) map[string]interface{} {
+func (a *GuildAgent) buildContext(currentChannelID, currentChannelName string) map[string]interface{} {
 	botName := "Bot"
 	if a.sender != nil {
 		botName = a.sender.GetBotUsername()
@@ -470,10 +497,6 @@ func (a *GuildAgent) buildContext(currentChannelID, currentChannelName, lastAuth
 			"id":                  currentChannelID,
 			"name":                currentChannelName,
 			"conversationHistory": currentChannelHistory,
-		},
-		"newMessage": map[string]interface{}{
-			"author":  lastAuthor,
-			"content": lastMessage,
 		},
 		// List of all channels the bot monitors in this guild (with recent messages)
 		"monitoredChannels": monitoredChannels,

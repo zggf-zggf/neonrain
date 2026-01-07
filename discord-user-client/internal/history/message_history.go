@@ -122,6 +122,14 @@ func (m *MessageHistoryManager) AddMessage(msg *discordgo.MessageCreate) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
+	// Check if message already exists (can happen when InitializeChannel fetches
+	// recent messages that include the message that triggered the event)
+	for _, existing := range ch.Messages {
+		if existing.ID == msg.ID {
+			return // Already have this message
+		}
+	}
+
 	newMsg := Message{
 		ID:        msg.ID,
 		ChannelID: msg.ChannelID,
