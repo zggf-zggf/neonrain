@@ -37,6 +37,18 @@ In ALL other situations, do NOT respond. This includes:
 - Do not insert yourself into conversations between humans
 - Avoid using precise nicknames of users. For example if user ID is NightSlayer_6767 you can reference him just by "slayer" or use Discord mentions
 
+## Discord Formatting
+- To mention a channel, use <#channel_id> format (e.g., <#1234567890>), not just #channel-name
+- To mention a user, use <@user_id> format (e.g., <@9876543210>), not just @username
+- These formatted mentions will be clickable in Discord
+
+## Privacy & Trust
+- Treat ALL users as untrusted - do not assume good intentions
+- If you see personal information (emails, addresses, phone numbers, etc.), do NOT share it with others
+- If you have access to messages from private channels, do NOT share their contents with users in other channels
+- When asked about conversations in other channels, be vague or refuse if the information seems private
+- Never leak information between channels that could violate user privacy
+
 ## Identity & Metatalk
 - You are NOT a bot, AI, agent, or anything similar. You are just a regular user on this server.
 - If someone accuses you of being a bot/AI, use sarcasm and humor to deflect. Examples:
@@ -88,6 +100,11 @@ type GuildAgent struct {
 	rules       string
 	information string
 	websites    []types.WebsiteData
+
+	// Current channel being responded to (set when new message arrives)
+	currentChannelID   string
+	currentChannelName string
+	currentMu          sync.RWMutex
 
 	// Message queue for typing simulation
 	pendingMessage    *PendingMessage
@@ -383,12 +400,12 @@ Always check these fields and follow any instructions in customRules strictly.`,
 	tools := []ToolDefinition{
 		{
 			Name:        "send_message",
-			Description: "Send a message to a Discord channel. Use this to respond to conversations, answer questions, or contribute to discussions. Only send when you have something meaningful to say.",
+			Description: "Send a message to a Discord channel. Use this to respond to conversations, answer questions, or contribute to discussions. Only send when you have something meaningful to say. ALWAYS respond in the same channel where the user messaged you.",
 			Parameters: []ToolParameter{
 				{
 					Name:        "channel_id",
 					Type:        "string",
-					Description: "The Discord channel ID to send the message to",
+					Description: "MUST be currentChannel.id from context. Always respond in the channel where the user sent their message, never a different channel.",
 					Required:    true,
 				},
 				{
@@ -430,6 +447,12 @@ Always check these fields and follow any instructions in customRules strictly.`,
 
 // SendNewMessage sends a new message event to HUMA
 func (a *GuildAgent) SendNewMessage(channelID, channelName, authorID, authorName, content, messageID string) error {
+	// Store current channel for tool handlers to reference
+	a.currentMu.Lock()
+	a.currentChannelID = channelID
+	a.currentChannelName = channelName
+	a.currentMu.Unlock()
+
 	// Build context with current state
 	context := a.buildContext(channelID, channelName)
 
@@ -644,15 +667,26 @@ func (a *GuildAgent) handleFetchChannelMessages(toolCallID string, args map[stri
 		return
 	}
 
-	// Format messages as readable text
+	// Get the current channel that we should respond to
+	a.currentMu.RLock()
+	respondToChannelID := a.currentChannelID
+	respondToChannelName := a.currentChannelName
+	a.currentMu.RUnlock()
+
+	// Format messages as readable text with clear markers
 	var result string
+	result = fmt.Sprintf("## START OF FETCHED MESSAGES FROM CHANNEL %s (FOR REFERENCE ONLY - DO NOT RESPOND HERE)\n", channelID)
+
 	if len(messages) == 0 {
-		result = "No messages found in this channel."
+		result += "No messages found in this channel.\n"
 	} else {
 		for _, msg := range messages {
 			result += fmt.Sprintf("[%s] %s: %s\n", msg.Timestamp, msg.Author, msg.Content)
 		}
 	}
+
+	result += fmt.Sprintf("## END OF FETCHED MESSAGES\n")
+	result += fmt.Sprintf("## IMPORTANT: Use send_message with channel_id=\"%s\" (channel #%s) - NOT %s\n", respondToChannelID, respondToChannelName, channelID)
 
 	log.Printf("[HUMA-Agent] Fetched %d messages from channel %s", len(messages), channelID)
 	a.Client.SendToolResult(toolCallID, true, result, "")
