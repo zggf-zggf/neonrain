@@ -353,8 +353,16 @@ func (dc *DiscordClient) processMessageWithHUMA(msg *discordgo.MessageCreate) {
 	)
 	if err != nil {
 		log.Printf("[HUMA] Error sending message to HUMA: %v", err)
-		// If websocket is closed, reconnect and retry
-		if strings.Contains(err.Error(), "websocket") || strings.Contains(err.Error(), "close") {
+		// Connection might be dead - reconnect and retry
+		// Covers: "websocket: close", "connection reset", "i/o timeout", "EOF", etc.
+		errStr := err.Error()
+		isConnectionError := strings.Contains(errStr, "websocket") ||
+			strings.Contains(errStr, "close") ||
+			strings.Contains(errStr, "reset") ||
+			strings.Contains(errStr, "timeout") ||
+			strings.Contains(errStr, "EOF") ||
+			strings.Contains(errStr, "broken pipe")
+		if isConnectionError {
 			log.Printf("[HUMA] Connection dead, reconnecting...")
 			dc.humaManager.RemoveAgent(guildID)
 
