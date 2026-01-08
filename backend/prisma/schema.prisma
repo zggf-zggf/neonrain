@@ -40,8 +40,9 @@ model User {
   messagesSentCount     Int       @default(0) @map("messages_sent_count")
   messagesReceivedCount Int       @default(0) @map("messages_received_count")
 
-  // Web chat conversations (multiple per user)
-  chatConversations ChatConversation[]
+  // Web chat conversation groups and conversations
+  chatConversationGroups ChatConversationGroup[]
+  chatConversations      ChatConversation[]
 
   // Chat personas for multi-user simulation
   chatPersonas      ChatPersona[]
@@ -108,16 +109,35 @@ model PendingDiscordToken {
   @@map("pending_discord_tokens")
 }
 
-model ChatConversation {
-  id        String        @id @default(uuid())
-  userId    String        @map("user_id")
-  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  title     String        @default("New conversation")
-  messages  ChatMessage[]
-  createdAt DateTime      @default(now()) @map("created_at")
-  updatedAt DateTime      @updatedAt @map("updated_at")
+// Group of conversations (1, 3, or 5 panes)
+model ChatConversationGroup {
+  id            String             @id @default(uuid())
+  userId        String             @map("user_id")
+  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title         String             @default("New chat")
+  paneCount     Int                @map("pane_count") // 1, 3, or 5
+  conversations ChatConversation[]
+  createdAt     DateTime           @default(now()) @map("created_at")
+  updatedAt     DateTime           @updatedAt @map("updated_at")
 
   @@index([userId, updatedAt(sort: Desc)])
+  @@map("chat_conversation_groups")
+}
+
+model ChatConversation {
+  id        String                 @id @default(uuid())
+  userId    String                 @map("user_id")
+  user      User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  groupId   String?                @map("group_id")
+  group     ChatConversationGroup? @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  paneIndex Int                    @default(0) @map("pane_index") // 0-4, position in group
+  title     String                 @default("New conversation")
+  messages  ChatMessage[]
+  createdAt DateTime               @default(now()) @map("created_at")
+  updatedAt DateTime               @updatedAt @map("updated_at")
+
+  @@index([userId, updatedAt(sort: Desc)])
+  @@index([groupId, paneIndex])
   @@map("chat_conversations")
 }
 

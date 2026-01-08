@@ -3,18 +3,8 @@
 import { useAuth, useUser } from "@clerk/nextjs";
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { io, Socket } from "socket.io-client";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { getDiscordStatus, setDiscordBotStatus } from "@/lib/api";
-
-interface ChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  senderName?: string;
-  createdAt: string;
-}
+import { ChatPane, ChatPaneRef } from "@/components/ChatPane";
 
 interface Persona {
   id: string;
@@ -22,99 +12,89 @@ interface Persona {
   color: string;
 }
 
-interface Conversation {
+interface ConversationInfo {
   id: string;
-  title: string;
-  createdAt: string;
-  updatedAt: string;
-  messageCount?: number;
+  paneIndex: number;
+  messages: Array<{
+    id: string;
+    role: "user" | "assistant";
+    content: string;
+    senderName?: string;
+    createdAt: string;
+  }>;
 }
 
-const BACKEND_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3000";
+interface Group {
+  id: string;
+  title: string;
+  paneCount: number;
+  createdAt: string;
+  updatedAt: string;
+  conversations: ConversationInfo[];
+}
+
+interface GroupListItem {
+  id: string;
+  title: string;
+  paneCount: number;
+  updatedAt: string;
+}
+
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3000";
 
 export default function ChatPage() {
   const { getToken, isLoaded: isAuthLoaded, isSignedIn } = useAuth();
   const { user, isLoaded: isUserLoaded } = useUser();
   const router = useRouter();
 
-  const [socket, setSocket] = useState<Socket | null>(null);
-  const [connected, setConnected] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [inputValue, setInputValue] = useState("");
-  const [isTyping, setIsTyping] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [discordBotActive, setDiscordBotActive] = useState(false);
   const [activatingBot, setActivatingBot] = useState(false);
 
-  // Conversation state
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
-  const [activeConversationTitle, setActiveConversationTitle] = useState<string>("New conversation");
+  // Group state
+  const [groups, setGroups] = useState<GroupListItem[]>([]);
+  const [activeGroup, setActiveGroup] = useState<Group | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [creatingConversation, setCreatingConversation] = useState(false);
-  const [copySuccess, setCopySuccess] = useState(false);
+  const [creatingGroup, setCreatingGroup] = useState(false);
+  const [showPaneSelector, setShowPaneSelector] = useState(false);
 
   // User names for chat display
   const [botName, setBotName] = useState<string>("Assistant");
   const defaultUserName = user?.firstName || user?.username || "You";
 
-  // Personas for multi-user simulation
+  // Personas (shared across all panes)
   const [personas, setPersonas] = useState<Persona[]>([]);
-  const [selectedPersonaId, setSelectedPersonaId] = useState<string | null>(null);
-  const [personaDropdownOpen, setPersonaDropdownOpen] = useState(false);
-  const [newPersonaName, setNewPersonaName] = useState("");
-  const [creatingPersona, setCreatingPersona] = useState(false);
 
-  // Get selected persona or default to user's name
-  const selectedPersona = personas.find((p) => p.id === selectedPersonaId);
-  const currentSenderName = selectedPersona?.nickname || defaultUserName;
+  // Global send-to-all input
+  const [globalInputValue, setGlobalInputValue] = useState("");
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  const socketRef = useRef<Socket | null>(null);
-  const personaDropdownRef = useRef<HTMLDivElement>(null);
+  // Refs to each chat pane
+  const paneRefs = useRef<(ChatPaneRef | null)[]>([]);
 
-  // Scroll to bottom when messages change
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isTyping]);
-
-  // Close persona dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (personaDropdownRef.current && !personaDropdownRef.current.contains(event.target as Node)) {
-        setPersonaDropdownOpen(false);
-      }
-    };
-
-    if (personaDropdownOpen) {
-      document.addEventListener("mousedown", handleClickOutside);
-      return () => document.removeEventListener("mousedown", handleClickOutside);
-    }
-  }, [personaDropdownOpen]);
-
-  // Load conversations list
-  const loadConversations = useCallback(async (token: string) => {
+  // Load groups list
+  const loadGroups = useCallback(async (authToken: string) => {
     try {
-      const response = await fetch(`${BACKEND_URL}/api/chat/conversations`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const response = await fetch(`${BACKEND_URL}/api/chat/groups`, {
+        headers: { Authorization: `Bearer ${authToken}` },
       });
       if (response.ok) {
         const data = await response.json();
-        setConversations(data.conversations);
+        setGroups(data.groups);
+        return data.groups;
       }
     } catch (err) {
-      console.error("[Chat] Failed to load conversations:", err);
+      console.error("[Chat] Failed to load groups:", err);
     }
+    return [];
   }, []);
 
-  // Load personas list
-  const loadPersonas = useCallback(async (token: string) => {
+  // Load personas
+  const loadPersonas = useCallback(async (authToken: string) => {
     try {
       const response = await fetch(`${BACKEND_URL}/api/chat/personas`, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${authToken}` },
       });
       if (response.ok) {
         const data = await response.json();
@@ -125,161 +105,142 @@ export default function ChatPage() {
     }
   }, []);
 
-  // Create new persona
-  const createPersona = async () => {
-    if (!newPersonaName.trim()) return;
-    setCreatingPersona(true);
+  // Load specific group
+  const loadGroup = useCallback(async (authToken: string, groupId: string) => {
     try {
-      const token = await getToken();
-      if (!token) return;
+      const response = await fetch(`${BACKEND_URL}/api/chat/groups/${groupId}`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setActiveGroup(data.group);
+        return data.group;
+      }
+    } catch (err) {
+      console.error("[Chat] Failed to load group:", err);
+    }
+    return null;
+  }, []);
 
+  // Create new group
+  const createGroup = async (paneCount: number) => {
+    setCreatingGroup(true);
+    setShowPaneSelector(false);
+    try {
+      // Get fresh token
+      const freshToken = await getToken();
+      if (!freshToken) {
+        console.error("[Chat] No token available");
+        return;
+      }
+      setToken(freshToken);
+
+      const url = `${BACKEND_URL}/api/chat/groups`;
+      console.log("[Chat] Creating group at:", url, "paneCount:", paneCount);
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${freshToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ paneCount }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log("[Chat] Group created:", data.group.id);
+        setActiveGroup(data.group);
+        await loadGroups(freshToken);
+      } else {
+        const errorText = await response.text();
+        console.error("[Chat] Failed to create group:", response.status, errorText);
+      }
+    } catch (err) {
+      console.error("[Chat] Failed to create group:", err);
+    } finally {
+      setCreatingGroup(false);
+    }
+  };
+
+  // Delete group
+  const deleteGroup = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!token || !confirm("Delete this chat?")) return;
+
+    try {
+      await fetch(`${BACKEND_URL}/api/chat/groups/${id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      const updatedGroups = groups.filter((g) => g.id !== id);
+      setGroups(updatedGroups);
+
+      if (activeGroup?.id === id) {
+        if (updatedGroups.length > 0) {
+          await loadGroup(token, updatedGroups[0].id);
+        } else {
+          setActiveGroup(null);
+        }
+      }
+    } catch (err) {
+      console.error("[Chat] Failed to delete group:", err);
+    }
+  };
+
+  // Create persona
+  const createPersona = async (nickname: string): Promise<Persona | null> => {
+    if (!token) return null;
+    try {
       const response = await fetch(`${BACKEND_URL}/api/chat/personas`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ nickname: newPersonaName.trim() }),
+        body: JSON.stringify({ nickname }),
       });
 
       if (response.ok) {
         const data = await response.json();
         setPersonas((prev) => [...prev, data.persona]);
-        setSelectedPersonaId(data.persona.id);
-        setNewPersonaName("");
-        setPersonaDropdownOpen(false);
+        return data.persona;
       }
     } catch (err) {
       console.error("[Chat] Failed to create persona:", err);
-    } finally {
-      setCreatingPersona(false);
     }
+    return null;
   };
 
   // Delete persona
-  const deletePersona = async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const deletePersona = async (id: string) => {
+    if (!token) return;
     try {
-      const token = await getToken();
-      if (!token) return;
-
       await fetch(`${BACKEND_URL}/api/chat/personas/${id}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
       });
-
       setPersonas((prev) => prev.filter((p) => p.id !== id));
-      if (selectedPersonaId === id) {
-        setSelectedPersonaId(null);
-      }
     } catch (err) {
       console.error("[Chat] Failed to delete persona:", err);
     }
   };
 
-  // Connect to a specific conversation
-  const connectToConversation = useCallback(async (conversationId: string | null) => {
-    // Disconnect existing socket
-    if (socketRef.current) {
-      socketRef.current.disconnect();
-      socketRef.current = null;
-      setSocket(null);
-      setConnected(false);
-    }
+  // Send to all panes
+  const sendToAll = useCallback(() => {
+    if (!globalInputValue.trim()) return;
+    const content = globalInputValue.trim();
+    setGlobalInputValue("");
 
-    setLoading(true);
-    setMessages([]);
-    setError(null);
-
-    try {
-      const token = await getToken();
-      if (!token) {
-        setError("Authentication required");
-        setLoading(false);
-        return;
+    paneRefs.current.forEach((ref) => {
+      if (ref?.isConnected()) {
+        ref.sendMessage(content);
       }
+    });
+  }, [globalInputValue]);
 
-      const socketInstance = io(BACKEND_URL, {
-        path: "/ws/chat",
-        auth: { token, conversationId },
-        transports: ["websocket"],
-      });
-
-      socketInstance.on("connect", () => {
-        console.log("[Chat] Connected to WebSocket");
-        setConnected(true);
-        setError(null);
-      });
-
-      socketInstance.on("disconnect", (reason) => {
-        console.log("[Chat] Disconnected:", reason);
-        setConnected(false);
-        if (reason === "io server disconnect") {
-          setError("Disconnected by server");
-        }
-      });
-
-      socketInstance.on("connect_error", (err) => {
-        console.error("[Chat] Connection error:", err.message);
-        setError(err.message);
-        setLoading(false);
-      });
-
-      socketInstance.on("chat:ready", async ({ conversationId: connectedId, title }) => {
-        console.log("[Chat] Ready, conversation:", connectedId);
-        setActiveConversationId(connectedId);
-        setActiveConversationTitle(title || "New conversation");
-        setLoading(false);
-
-        // Load messages for this conversation
-        const response = await fetch(`${BACKEND_URL}/api/chat/conversations/${connectedId}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (response.ok) {
-          const data = await response.json();
-          setMessages(data.conversation.messages);
-        }
-
-        // Refresh conversations list
-        loadConversations(token);
-      });
-
-      socketInstance.on("chat:message", (message: ChatMessage) => {
-        setMessages((prev) => [...prev, message]);
-      });
-
-      socketInstance.on("chat:typing", ({ isTyping: typing }) => {
-        setIsTyping(typing);
-      });
-
-      socketInstance.on("chat:title-updated", ({ title }) => {
-        setActiveConversationTitle(title);
-        // Update in conversations list too
-        setConversations((prev) =>
-          prev.map((c) =>
-            c.id === activeConversationId ? { ...c, title } : c
-          )
-        );
-      });
-
-      socketInstance.on("chat:error", ({ message, code }) => {
-        console.error("[Chat] Error:", message, code);
-        setError(message);
-        if (code === "NO_SERVER") {
-          setTimeout(() => router.push("/setup"), 2000);
-        }
-      });
-
-      socketRef.current = socketInstance;
-      setSocket(socketInstance);
-    } catch (err) {
-      console.error("[Chat] Setup error:", err);
-      setError("Failed to connect");
-      setLoading(false);
-    }
-  }, [getToken, router, loadConversations, activeConversationId]);
-
-  // Initial connection
+  // Initialize
   useEffect(() => {
     if (!isAuthLoaded || !isUserLoaded) return;
 
@@ -289,12 +250,13 @@ export default function ChatPage() {
     }
 
     async function initialize() {
-      const token = await getToken();
-      if (!token) return;
+      const authToken = await getToken();
+      if (!authToken) return;
+      setToken(authToken);
 
-      // Load Discord status (includes bot name and active status)
+      // Load Discord status
       try {
-        const status = await getDiscordStatus(token);
+        const status = await getDiscordStatus(authToken);
         setDiscordBotActive(status.botActive);
         if (status.botName) {
           setBotName(status.botName);
@@ -303,105 +265,25 @@ export default function ChatPage() {
         // Ignore
       }
 
-      // Load personas and conversations, then connect
-      await loadPersonas(token);
-      await loadConversations(token);
-      connectToConversation(null); // Connect to most recent
+      // Load personas and groups
+      await loadPersonas(authToken);
+      const groupList = await loadGroups(authToken);
+
+      // Load most recent group or show empty state
+      if (groupList.length > 0) {
+        await loadGroup(authToken, groupList[0].id);
+      }
+
+      setLoading(false);
     }
 
     initialize();
-
-    return () => {
-      if (socketRef.current) {
-        socketRef.current.disconnect();
-      }
-    };
-  }, [isAuthLoaded, isUserLoaded, isSignedIn, getToken, router, loadPersonas, loadConversations, connectToConversation]);
-
-  // Create new conversation
-  const createNewConversation = async () => {
-    setCreatingConversation(true);
-    try {
-      const token = await getToken();
-      if (!token) return;
-
-      const response = await fetch(`${BACKEND_URL}/api/chat/conversations`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        // Connect to the new conversation
-        connectToConversation(data.conversation.id);
-      }
-    } catch (err) {
-      console.error("[Chat] Failed to create conversation:", err);
-    } finally {
-      setCreatingConversation(false);
-    }
-  };
-
-  // Delete conversation
-  const deleteConversation = async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!confirm("Delete this conversation?")) return;
-
-    try {
-      const token = await getToken();
-      if (!token) return;
-
-      await fetch(`${BACKEND_URL}/api/chat/conversations/${id}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      // If deleting active conversation, switch to another
-      if (id === activeConversationId) {
-        const remaining = conversations.filter((c) => c.id !== id);
-        if (remaining.length > 0) {
-          connectToConversation(remaining[0].id);
-        } else {
-          createNewConversation();
-        }
-      }
-
-      setConversations((prev) => prev.filter((c) => c.id !== id));
-    } catch (err) {
-      console.error("[Chat] Failed to delete conversation:", err);
-    }
-  };
-
-  // Copy conversation as markdown
-  const copyAsMarkdown = async () => {
-    const markdown = messages
-      .map((msg) => {
-        const name = msg.role === "user" ? (msg.senderName || defaultUserName) : botName;
-        const time = new Date(msg.createdAt).toLocaleString();
-        return `**${name}** (${time}):\n${msg.content}`;
-      })
-      .join("\n\n---\n\n");
-
-    const header = `# ${activeConversationTitle}\n\n`;
-
-    try {
-      await navigator.clipboard.writeText(header + markdown);
-      setCopySuccess(true);
-      setTimeout(() => setCopySuccess(false), 2000);
-    } catch (err) {
-      console.error("[Chat] Failed to copy:", err);
-    }
-  };
+  }, [isAuthLoaded, isUserLoaded, isSignedIn, getToken, router, loadPersonas, loadGroups, loadGroup]);
 
   async function handleActivateBot() {
+    if (!token) return;
     setActivatingBot(true);
     try {
-      const token = await getToken();
-      if (!token) return;
-
       const result = await setDiscordBotStatus(token, true);
       setDiscordBotActive(result.active);
     } catch (err) {
@@ -411,28 +293,7 @@ export default function ChatPage() {
     }
   }
 
-  const sendMessage = useCallback(() => {
-    if (!socket || !connected || !inputValue.trim()) return;
-
-    socket.emit("chat:message", { content: inputValue.trim(), senderName: currentSenderName });
-    setInputValue("");
-    inputRef.current?.focus();
-  }, [socket, connected, inputValue, currentSenderName]);
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
-  };
-
-  const cancelResponse = () => {
-    if (socket && isTyping) {
-      socket.emit("chat:cancel", {});
-    }
-  };
-
-  if (!isAuthLoaded || !isUserLoaded) {
+  if (!isAuthLoaded || !isUserLoaded || loading) {
     return (
       <div className="h-screen flex items-center justify-center bg-gray-950">
         <div className="text-gray-400">Loading...</div>
@@ -440,7 +301,7 @@ export default function ChatPage() {
     );
   }
 
-  if (error && !loading) {
+  if (error) {
     return (
       <div className="h-screen flex items-center justify-center bg-gray-950">
         <div className="text-center">
@@ -467,35 +328,42 @@ export default function ChatPage() {
         {/* Sidebar Header */}
         <div className="p-3 border-b border-gray-800">
           <button
-            onClick={createNewConversation}
-            disabled={creatingConversation}
+            onClick={() => setShowPaneSelector(true)}
+            disabled={creatingGroup}
             className="w-full px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition flex items-center justify-center gap-2 disabled:opacity-50"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
             </svg>
-            {creatingConversation ? "Creating..." : "New Chat"}
+            {creatingGroup ? "Creating..." : "New Chat"}
           </button>
         </div>
 
-        {/* Conversations List */}
+        {/* Groups List */}
         <div className="flex-1 overflow-y-auto">
-          {conversations.map((conv) => (
+          {groups.map((group) => (
             <div
-              key={conv.id}
-              onClick={() => conv.id !== activeConversationId && connectToConversation(conv.id)}
+              key={group.id}
+              onClick={() => token && loadGroup(token, group.id)}
               className={`group px-3 py-2 cursor-pointer hover:bg-gray-800 flex items-center justify-between ${
-                conv.id === activeConversationId ? "bg-gray-800" : ""
+                activeGroup?.id === group.id ? "bg-gray-800" : ""
               }`}
             >
               <div className="flex-1 min-w-0">
-                <div className="text-sm text-gray-200 truncate">{conv.title}</div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-200 truncate">{group.title}</span>
+                  {group.paneCount > 1 && (
+                    <span className="text-xs text-gray-500 bg-gray-700 px-1.5 py-0.5 rounded">
+                      {group.paneCount}
+                    </span>
+                  )}
+                </div>
                 <div className="text-xs text-gray-500">
-                  {new Date(conv.updatedAt).toLocaleDateString()}
+                  {new Date(group.updatedAt).toLocaleDateString()}
                 </div>
               </div>
               <button
-                onClick={(e) => deleteConversation(conv.id, e)}
+                onClick={(e) => deleteGroup(group.id, e)}
                 className="opacity-0 group-hover:opacity-100 p-1 text-gray-500 hover:text-red-400 transition"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -507,6 +375,32 @@ export default function ChatPage() {
         </div>
       </div>
 
+      {/* Pane Count Selector Modal */}
+      {showPaneSelector && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-gray-900 rounded-xl p-6 max-w-sm w-full mx-4">
+            <h3 className="text-lg font-medium text-white mb-4">How many conversation panes?</h3>
+            <div className="flex gap-3">
+              {[1, 3, 5].map((count) => (
+                <button
+                  key={count}
+                  onClick={() => createGroup(count)}
+                  className="flex-1 py-4 bg-gray-800 hover:bg-gray-700 rounded-lg text-white font-medium transition"
+                >
+                  {count}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setShowPaneSelector(false)}
+              className="w-full mt-4 py-2 text-gray-400 hover:text-white transition"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Header */}
@@ -514,7 +408,6 @@ export default function ChatPage() {
           <div className="px-4 py-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                {/* Toggle Sidebar */}
                 <button
                   onClick={() => setSidebarOpen(!sidebarOpen)}
                   className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition"
@@ -525,7 +418,12 @@ export default function ChatPage() {
                 </button>
 
                 <div>
-                  <p className="text-white font-medium truncate max-w-md">{activeConversationTitle}</p>
+                  <p className="text-white font-medium truncate max-w-md">
+                    {activeGroup?.title || "No chat selected"}
+                    {activeGroup && activeGroup.paneCount > 1 && (
+                      <span className="ml-2 text-xs text-indigo-300">({activeGroup.paneCount} panes)</span>
+                    )}
+                  </p>
                   <p className="text-indigo-300 text-sm">
                     {discordBotActive ? "Discord Bot Active" : "Configure your AI assistant"}
                   </p>
@@ -533,35 +431,7 @@ export default function ChatPage() {
               </div>
 
               <div className="flex items-center gap-2">
-                {/* Copy as Markdown */}
-                {messages.length > 0 && (
-                  <button
-                    onClick={copyAsMarkdown}
-                    className={`px-3 py-1.5 text-sm rounded-lg transition flex items-center gap-1 ${
-                      copySuccess
-                        ? "bg-green-600 text-white"
-                        : "bg-gray-700 text-gray-300 hover:bg-gray-600"
-                    }`}
-                  >
-                    {copySuccess ? (
-                      <>
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                        </svg>
-                        Copied!
-                      </>
-                    ) : (
-                      <>
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
-                        </svg>
-                        Copy MD
-                      </>
-                    )}
-                  </button>
-                )}
-
-                {!discordBotActive && messages.length >= 2 && (
+                {!discordBotActive && activeGroup && (
                   <button
                     onClick={handleActivateBot}
                     disabled={activatingBot}
@@ -581,251 +451,80 @@ export default function ChatPage() {
           </div>
         </div>
 
-        {/* Chat Messages */}
-        <div className="flex-1 overflow-y-auto px-4 py-6">
-          <div className="max-w-3xl mx-auto">
-            {loading ? (
-              <div className="text-center py-12 text-gray-400">Loading conversation...</div>
-            ) : messages.length === 0 ? (
-              <div className="text-center py-12">
-                <div className="w-16 h-16 bg-indigo-600/20 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <svg className="w-8 h-8 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                  </svg>
-                </div>
-                <h3 className="text-xl font-semibold text-white mb-2">Start a New Conversation</h3>
-                <p className="text-gray-400 max-w-md mx-auto mb-6">
-                  Chat with your AI assistant. The conversation helps shape how it responds on Discord.
-                </p>
-                <div className="bg-gray-800/50 rounded-xl p-4 max-w-md mx-auto text-left">
-                  <p className="text-gray-300 text-sm mb-3">Try saying something like:</p>
-                  <ul className="space-y-2 text-sm text-gray-400">
-                    <li className="flex items-start gap-2">
-                      <span className="text-indigo-400">&#8226;</span>
-                      <span>&quot;Hi! Tell me about yourself&quot;</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-indigo-400">&#8226;</span>
-                      <span>&quot;I want you to be more casual and funny&quot;</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-indigo-400">&#8226;</span>
-                      <span>&quot;Our Discord is about gaming, especially FPS games&quot;</span>
-                    </li>
-                  </ul>
-                </div>
-              </div>
-            ) : (
-              messages.map((msg, index) => {
-                // For user messages, find matching persona color or use default
-                const senderName = msg.role === "user" ? (msg.senderName || defaultUserName) : botName;
-                const matchingPersona = personas.find((p) => p.nickname === msg.senderName);
-                const userColor = matchingPersona?.color || "#818cf8"; // indigo fallback
-
-                // Check if this is a continuation from the same sender
-                const prevMsg = index > 0 ? messages[index - 1] : null;
-                const prevSenderName = prevMsg
-                  ? prevMsg.role === "user"
-                    ? (prevMsg.senderName || defaultUserName)
-                    : botName
-                  : null;
-                const isContinuation = prevSenderName === senderName;
-
-                return (
-                  <div key={msg.id} className={`flex flex-col ${isContinuation ? "mt-1" : index > 0 ? "mt-4" : ""}`}>
-                    {/* Username and timestamp - only show for first message in a group */}
-                    {!isContinuation && (
-                      <div className="flex items-baseline gap-2 mb-1">
-                        <span
-                          className="text-sm font-medium"
-                          style={{ color: msg.role === "user" ? userColor : "#4ade80" }}
-                        >
-                          {senderName}
-                        </span>
-                        <span className="text-xs text-gray-500">
-                          {new Date(msg.createdAt).toLocaleTimeString()}
-                        </span>
-                      </div>
-                    )}
-                    {/* Message content */}
-                    <div className="pl-0">
-                      {msg.role === "assistant" ? (
-                        <div className="prose prose-invert prose-sm max-w-none text-gray-100">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                            {msg.content}
-                          </ReactMarkdown>
-                        </div>
-                      ) : (
-                        <div className="whitespace-pre-wrap break-words text-gray-100">
-                          {msg.content}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })
-            )}
-
-            {isTyping && (
-              <div className="flex flex-col mt-4">
-                <div className="flex items-baseline gap-2 mb-1">
-                  <span className="text-sm font-medium text-green-400">{botName}</span>
-                  <span className="text-xs text-gray-500">typing...</span>
-                </div>
-                <div className="flex items-center gap-1 text-gray-400">
-                  <span
-                    className="w-2 h-2 bg-gray-500 rounded-full animate-bounce"
-                    style={{ animationDelay: "0ms" }}
-                  />
-                  <span
-                    className="w-2 h-2 bg-gray-500 rounded-full animate-bounce"
-                    style={{ animationDelay: "150ms" }}
-                  />
-                  <span
-                    className="w-2 h-2 bg-gray-500 rounded-full animate-bounce"
-                    style={{ animationDelay: "300ms" }}
-                  />
-                </div>
-              </div>
-            )}
-
-            <div ref={messagesEndRef} />
-          </div>
-        </div>
-
-        {/* Input Area */}
-        <div className="border-t border-gray-800 px-4 py-4">
-          <div className="max-w-3xl mx-auto">
-            {/* Persona Selector */}
-            <div className="mb-3 relative" ref={personaDropdownRef}>
-              <button
-                onClick={() => setPersonaDropdownOpen(!personaDropdownOpen)}
-                className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded-lg hover:bg-gray-750 transition text-sm"
-              >
-                <span
-                  className="w-3 h-3 rounded-full"
-                  style={{ backgroundColor: selectedPersona?.color || "#818cf8" }}
-                />
-                <span className="text-gray-200">{currentSenderName}</span>
-                <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-
-              {personaDropdownOpen && (
-                <div className="absolute bottom-full mb-2 left-0 w-64 bg-gray-800 border border-gray-700 rounded-lg shadow-lg z-10">
-                  {/* Default user option */}
-                  <div
-                    onClick={() => {
-                      setSelectedPersonaId(null);
-                      setPersonaDropdownOpen(false);
+        {/* Chat Panes */}
+        {activeGroup && token && activeGroup.conversations?.length > 0 ? (
+          <div className="flex-1 flex flex-col min-h-0">
+            <div className="flex-1 flex min-h-0">
+              {activeGroup.conversations.map((conv, index) => (
+                <div key={conv.id} className="flex-1 min-w-0 h-full">
+                  <ChatPane
+                    ref={(el) => {
+                      paneRefs.current[index] = el;
                     }}
-                    className={`flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-700 ${
-                      !selectedPersonaId ? "bg-gray-700" : ""
-                    }`}
-                  >
-                    <span className="w-3 h-3 rounded-full bg-indigo-400" />
-                    <span className="text-gray-200 flex-1">{defaultUserName}</span>
-                    <span className="text-xs text-gray-500">default</span>
-                  </div>
-
-                  {/* Existing personas */}
-                  {personas.map((persona) => (
-                    <div
-                      key={persona.id}
-                      onClick={() => {
-                        setSelectedPersonaId(persona.id);
-                        setPersonaDropdownOpen(false);
-                      }}
-                      className={`group flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-700 ${
-                        selectedPersonaId === persona.id ? "bg-gray-700" : ""
-                      }`}
-                    >
-                      <span
-                        className="w-3 h-3 rounded-full"
-                        style={{ backgroundColor: persona.color }}
-                      />
-                      <span className="text-gray-200 flex-1">{persona.nickname}</span>
-                      <button
-                        onClick={(e) => deletePersona(persona.id, e)}
-                        className="opacity-0 group-hover:opacity-100 p-1 text-gray-500 hover:text-red-400"
-                      >
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                      </button>
-                    </div>
-                  ))}
-
-                  {/* Create new persona */}
-                  <div className="border-t border-gray-700 p-2">
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={newPersonaName}
-                        onChange={(e) => setNewPersonaName(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            if (newPersonaName.trim()) {
-                              createPersona();
-                            } else {
-                              setPersonaDropdownOpen(false);
-                            }
-                          } else if (e.key === "Escape") {
-                            setPersonaDropdownOpen(false);
-                          }
-                        }}
-                        placeholder="New persona name..."
-                        maxLength={32}
-                        className="min-w-0 flex-1 px-2 py-1 bg-gray-900 border border-gray-600 rounded text-sm text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500"
-                      />
-                      <button
-                        onClick={createPersona}
-                        disabled={!newPersonaName.trim() || creatingPersona}
-                        className="flex-shrink-0 px-2 py-1 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700 disabled:opacity-50"
-                      >
-                        Add
-                      </button>
-                    </div>
-                  </div>
+                    conversationId={conv.id}
+                    token={token}
+                    botName={botName}
+                    defaultUserName={defaultUserName}
+                    personas={personas}
+                    onPersonaCreate={createPersona}
+                    onPersonaDelete={deletePersona}
+                    paneIndex={index}
+                    totalPanes={activeGroup.paneCount}
+                  />
                 </div>
-              )}
+              ))}
             </div>
 
-            <div className="flex gap-3">
-              <div className="flex-1 relative">
-                <textarea
-                  ref={inputRef}
-                  value={inputValue}
-                  onChange={(e) => setInputValue(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Type a message..."
-                  rows={1}
-                  className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white placeholder-gray-500 resize-none focus:outline-none focus:border-indigo-500"
-                  disabled={!connected || loading}
-                />
+            {/* Global Send-to-All Input (only show for multi-pane) */}
+            {activeGroup.paneCount > 1 && (
+              <div className="border-t border-gray-700 bg-gray-900 px-4 py-3">
+                <div className="flex gap-3 items-center">
+                  <span className="text-xs text-gray-400 whitespace-nowrap">Send to all:</span>
+                  <input
+                    type="text"
+                    value={globalInputValue}
+                    onChange={(e) => setGlobalInputValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        sendToAll();
+                      }
+                    }}
+                    placeholder="Type a message to send to all panes..."
+                    className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500"
+                  />
+                  <button
+                    onClick={sendToAll}
+                    disabled={!globalInputValue.trim()}
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition disabled:opacity-50 text-sm"
+                  >
+                    Send All
+                  </button>
+                </div>
               </div>
-              {isTyping && (
-                <button
-                  onClick={cancelResponse}
-                  className="px-4 py-3 bg-red-600 text-white rounded-xl hover:bg-red-700 transition"
-                >
-                  Cancel
-                </button>
-              )}
-              <button
-                onClick={sendMessage}
-                disabled={!connected || !inputValue.trim() || loading}
-                className="px-4 py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Send
-              </button>
-            </div>
-            {!connected && !loading && (
-              <div className="text-yellow-400 text-sm mt-2">Reconnecting...</div>
             )}
           </div>
-        </div>
+        ) : (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-center">
+              <div className="w-16 h-16 bg-indigo-600/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg className="w-8 h-8 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                </svg>
+              </div>
+              <h3 className="text-xl font-semibold text-white mb-2">Start a New Chat</h3>
+              <p className="text-gray-400 mb-6">
+                Create a new chat with 1, 3, or 5 conversation panes.
+              </p>
+              <button
+                onClick={() => setShowPaneSelector(true)}
+                className="px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition"
+              >
+                New Chat
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

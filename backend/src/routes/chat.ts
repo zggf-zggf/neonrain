@@ -139,6 +139,270 @@ router.delete('/personas/:id', requireAuth(), async (req: Request, res: Response
 });
 
 // ============================================================================
+// CONVERSATION GROUP ENDPOINTS
+// ============================================================================
+
+// GET /api/chat/groups - List all conversation groups for user (newest first)
+router.get('/groups', requireAuth(), async (req: Request, res: Response) => {
+  try {
+    const auth = getAuth(req);
+    if (!auth.userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const user = await getOrCreateUser(auth.userId);
+
+    const groups = await prisma.chatConversationGroup.findMany({
+      where: { userId: user.id },
+      orderBy: { updatedAt: 'desc' },
+      include: {
+        conversations: {
+          select: {
+            id: true,
+            paneIndex: true,
+            _count: { select: { messages: true } },
+          },
+          orderBy: { paneIndex: 'asc' },
+        },
+      },
+    });
+
+    res.json({
+      success: true,
+      groups: groups.map((g) => ({
+        id: g.id,
+        title: g.title,
+        paneCount: g.paneCount,
+        createdAt: g.createdAt,
+        updatedAt: g.updatedAt,
+        conversations: g.conversations.map((c) => ({
+          id: c.id,
+          paneIndex: c.paneIndex,
+          messageCount: c._count.messages,
+        })),
+      })),
+    });
+  } catch (error) {
+    console.error('List groups error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/chat/groups - Create new conversation group
+router.post('/groups', requireAuth(), async (req: Request, res: Response) => {
+  try {
+    const auth = getAuth(req);
+    if (!auth.userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const user = await getOrCreateUser(auth.userId);
+    const { paneCount } = req.body;
+
+    // Validate paneCount
+    if (![1, 3, 5].includes(paneCount)) {
+      return res.status(400).json({ error: 'paneCount must be 1, 3, or 5' });
+    }
+
+    // Check if user has required configuration
+    if (!user.selectedGuildId) {
+      return res.status(400).json({
+        error: 'No server configured',
+        code: 'NO_SERVER_CONFIGURED',
+      });
+    }
+
+    // Create group with conversations in a transaction
+    const group = await prisma.$transaction(async (tx) => {
+      const newGroup = await tx.chatConversationGroup.create({
+        data: {
+          userId: user.id,
+          title: 'New chat',
+          paneCount,
+        },
+      });
+
+      // Create conversations for each pane
+      const conversationPromises = [];
+      for (let i = 0; i < paneCount; i++) {
+        conversationPromises.push(
+          tx.chatConversation.create({
+            data: {
+              userId: user.id,
+              groupId: newGroup.id,
+              paneIndex: i,
+              title: `Pane ${i + 1}`,
+            },
+          })
+        );
+      }
+      const conversations = await Promise.all(conversationPromises);
+
+      return { ...newGroup, conversations };
+    });
+
+    console.log(`[Chat] User ${user.id} created group ${group.id} with ${paneCount} panes`);
+
+    res.json({
+      success: true,
+      group: {
+        id: group.id,
+        title: group.title,
+        paneCount: group.paneCount,
+        createdAt: group.createdAt,
+        updatedAt: group.updatedAt,
+        conversations: group.conversations.map((c) => ({
+          id: c.id,
+          paneIndex: c.paneIndex,
+          messages: [],
+        })),
+      },
+    });
+  } catch (error) {
+    console.error('Create group error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/chat/groups/:id - Get specific group with all conversations and messages
+router.get('/groups/:id', requireAuth(), async (req: Request, res: Response) => {
+  try {
+    const auth = getAuth(req);
+    if (!auth.userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const user = await getOrCreateUser(auth.userId);
+    const { id } = req.params;
+
+    const group = await prisma.chatConversationGroup.findFirst({
+      where: {
+        id,
+        userId: user.id,
+      },
+      include: {
+        conversations: {
+          orderBy: { paneIndex: 'asc' },
+          include: {
+            messages: {
+              orderBy: { createdAt: 'asc' },
+              take: 50,
+            },
+          },
+        },
+      },
+    });
+
+    if (!group) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+
+    res.json({
+      success: true,
+      group: {
+        id: group.id,
+        title: group.title,
+        paneCount: group.paneCount,
+        createdAt: group.createdAt,
+        updatedAt: group.updatedAt,
+        conversations: group.conversations.map((c) => ({
+          id: c.id,
+          paneIndex: c.paneIndex,
+          messages: c.messages.map((m) => ({
+            id: m.id,
+            role: m.role,
+            content: m.content,
+            senderName: m.senderName,
+            createdAt: m.createdAt,
+          })),
+        })),
+      },
+    });
+  } catch (error) {
+    console.error('Get group error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// PATCH /api/chat/groups/:id - Update group (title)
+router.patch('/groups/:id', requireAuth(), async (req: Request, res: Response) => {
+  try {
+    const auth = getAuth(req);
+    if (!auth.userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const user = await getOrCreateUser(auth.userId);
+    const { id } = req.params;
+    const { title } = req.body;
+
+    const existing = await prisma.chatConversationGroup.findFirst({
+      where: {
+        id,
+        userId: user.id,
+      },
+    });
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+
+    const group = await prisma.chatConversationGroup.update({
+      where: { id },
+      data: { title: title || existing.title },
+    });
+
+    res.json({
+      success: true,
+      group: {
+        id: group.id,
+        title: group.title,
+        updatedAt: group.updatedAt,
+      },
+    });
+  } catch (error) {
+    console.error('Update group error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// DELETE /api/chat/groups/:id - Delete group and all its conversations
+router.delete('/groups/:id', requireAuth(), async (req: Request, res: Response) => {
+  try {
+    const auth = getAuth(req);
+    if (!auth.userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const user = await getOrCreateUser(auth.userId);
+    const { id } = req.params;
+
+    const existing = await prisma.chatConversationGroup.findFirst({
+      where: {
+        id,
+        userId: user.id,
+      },
+    });
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+
+    // Cascade delete will handle conversations and messages
+    await prisma.chatConversationGroup.delete({
+      where: { id },
+    });
+
+    console.log(`[Chat] User ${user.id} deleted group ${id}`);
+
+    res.json({ success: true, message: 'Group deleted' });
+  } catch (error) {
+    console.error('Delete group error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ============================================================================
 // CONVERSATION ENDPOINTS
 // ============================================================================
 
