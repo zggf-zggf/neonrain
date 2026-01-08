@@ -12,7 +12,14 @@ interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  senderName?: string;
   createdAt: string;
+}
+
+interface Persona {
+  id: string;
+  nickname: string;
+  color: string;
 }
 
 interface Conversation {
@@ -51,16 +58,42 @@ export default function ChatPage() {
 
   // User names for chat display
   const [botName, setBotName] = useState<string>("Assistant");
-  const userName = user?.firstName || user?.username || "You";
+  const defaultUserName = user?.firstName || user?.username || "You";
+
+  // Personas for multi-user simulation
+  const [personas, setPersonas] = useState<Persona[]>([]);
+  const [selectedPersonaId, setSelectedPersonaId] = useState<string | null>(null);
+  const [personaDropdownOpen, setPersonaDropdownOpen] = useState(false);
+  const [newPersonaName, setNewPersonaName] = useState("");
+  const [creatingPersona, setCreatingPersona] = useState(false);
+
+  // Get selected persona or default to user's name
+  const selectedPersona = personas.find((p) => p.id === selectedPersonaId);
+  const currentSenderName = selectedPersona?.nickname || defaultUserName;
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const socketRef = useRef<Socket | null>(null);
+  const personaDropdownRef = useRef<HTMLDivElement>(null);
 
   // Scroll to bottom when messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
+
+  // Close persona dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (personaDropdownRef.current && !personaDropdownRef.current.contains(event.target as Node)) {
+        setPersonaDropdownOpen(false);
+      }
+    };
+
+    if (personaDropdownOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+  }, [personaDropdownOpen]);
 
   // Load conversations list
   const loadConversations = useCallback(async (token: string) => {
@@ -76,6 +109,73 @@ export default function ChatPage() {
       console.error("[Chat] Failed to load conversations:", err);
     }
   }, []);
+
+  // Load personas list
+  const loadPersonas = useCallback(async (token: string) => {
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/chat/personas`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setPersonas(data.personas);
+      }
+    } catch (err) {
+      console.error("[Chat] Failed to load personas:", err);
+    }
+  }, []);
+
+  // Create new persona
+  const createPersona = async () => {
+    if (!newPersonaName.trim()) return;
+    setCreatingPersona(true);
+    try {
+      const token = await getToken();
+      if (!token) return;
+
+      const response = await fetch(`${BACKEND_URL}/api/chat/personas`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ nickname: newPersonaName.trim() }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setPersonas((prev) => [...prev, data.persona]);
+        setSelectedPersonaId(data.persona.id);
+        setNewPersonaName("");
+        setPersonaDropdownOpen(false);
+      }
+    } catch (err) {
+      console.error("[Chat] Failed to create persona:", err);
+    } finally {
+      setCreatingPersona(false);
+    }
+  };
+
+  // Delete persona
+  const deletePersona = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      const token = await getToken();
+      if (!token) return;
+
+      await fetch(`${BACKEND_URL}/api/chat/personas/${id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      setPersonas((prev) => prev.filter((p) => p.id !== id));
+      if (selectedPersonaId === id) {
+        setSelectedPersonaId(null);
+      }
+    } catch (err) {
+      console.error("[Chat] Failed to delete persona:", err);
+    }
+  };
 
   // Connect to a specific conversation
   const connectToConversation = useCallback(async (conversationId: string | null) => {
@@ -203,7 +303,8 @@ export default function ChatPage() {
         // Ignore
       }
 
-      // Load conversations and connect
+      // Load personas and conversations, then connect
+      await loadPersonas(token);
       await loadConversations(token);
       connectToConversation(null); // Connect to most recent
     }
@@ -215,7 +316,7 @@ export default function ChatPage() {
         socketRef.current.disconnect();
       }
     };
-  }, [isAuthLoaded, isUserLoaded, isSignedIn, getToken, router, loadConversations, connectToConversation]);
+  }, [isAuthLoaded, isUserLoaded, isSignedIn, getToken, router, loadPersonas, loadConversations, connectToConversation]);
 
   // Create new conversation
   const createNewConversation = async () => {
@@ -278,7 +379,7 @@ export default function ChatPage() {
   const copyAsMarkdown = async () => {
     const markdown = messages
       .map((msg) => {
-        const name = msg.role === "user" ? userName : botName;
+        const name = msg.role === "user" ? (msg.senderName || defaultUserName) : botName;
         const time = new Date(msg.createdAt).toLocaleString();
         return `**${name}** (${time}):\n${msg.content}`;
       })
@@ -313,10 +414,10 @@ export default function ChatPage() {
   const sendMessage = useCallback(() => {
     if (!socket || !connected || !inputValue.trim()) return;
 
-    socket.emit("chat:message", { content: inputValue.trim() });
+    socket.emit("chat:message", { content: inputValue.trim(), senderName: currentSenderName });
     setInputValue("");
     inputRef.current?.focus();
-  }, [socket, connected, inputValue]);
+  }, [socket, connected, inputValue, currentSenderName]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -482,7 +583,7 @@ export default function ChatPage() {
 
         {/* Chat Messages */}
         <div className="flex-1 overflow-y-auto px-4 py-6">
-          <div className="max-w-3xl mx-auto space-y-4">
+          <div className="max-w-3xl mx-auto">
             {loading ? (
               <div className="text-center py-12 text-gray-400">Loading conversation...</div>
             ) : messages.length === 0 ? (
@@ -515,41 +616,58 @@ export default function ChatPage() {
                 </div>
               </div>
             ) : (
-              messages.map((msg) => (
-                <div key={msg.id} className="flex flex-col">
-                  {/* Username and timestamp */}
-                  <div className="flex items-baseline gap-2 mb-1">
-                    <span
-                      className={`text-sm font-medium ${
-                        msg.role === "user" ? "text-indigo-400" : "text-green-400"
-                      }`}
-                    >
-                      {msg.role === "user" ? userName : botName}
-                    </span>
-                    <span className="text-xs text-gray-500">
-                      {new Date(msg.createdAt).toLocaleTimeString()}
-                    </span>
-                  </div>
-                  {/* Message content */}
-                  <div className="pl-0">
-                    {msg.role === "assistant" ? (
-                      <div className="prose prose-invert prose-sm max-w-none text-gray-100">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {msg.content}
-                        </ReactMarkdown>
-                      </div>
-                    ) : (
-                      <div className="whitespace-pre-wrap break-words text-gray-100">
-                        {msg.content}
+              messages.map((msg, index) => {
+                // For user messages, find matching persona color or use default
+                const senderName = msg.role === "user" ? (msg.senderName || defaultUserName) : botName;
+                const matchingPersona = personas.find((p) => p.nickname === msg.senderName);
+                const userColor = matchingPersona?.color || "#818cf8"; // indigo fallback
+
+                // Check if this is a continuation from the same sender
+                const prevMsg = index > 0 ? messages[index - 1] : null;
+                const prevSenderName = prevMsg
+                  ? prevMsg.role === "user"
+                    ? (prevMsg.senderName || defaultUserName)
+                    : botName
+                  : null;
+                const isContinuation = prevSenderName === senderName;
+
+                return (
+                  <div key={msg.id} className={`flex flex-col ${isContinuation ? "mt-1" : index > 0 ? "mt-4" : ""}`}>
+                    {/* Username and timestamp - only show for first message in a group */}
+                    {!isContinuation && (
+                      <div className="flex items-baseline gap-2 mb-1">
+                        <span
+                          className="text-sm font-medium"
+                          style={{ color: msg.role === "user" ? userColor : "#4ade80" }}
+                        >
+                          {senderName}
+                        </span>
+                        <span className="text-xs text-gray-500">
+                          {new Date(msg.createdAt).toLocaleTimeString()}
+                        </span>
                       </div>
                     )}
+                    {/* Message content */}
+                    <div className="pl-0">
+                      {msg.role === "assistant" ? (
+                        <div className="prose prose-invert prose-sm max-w-none text-gray-100">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {msg.content}
+                          </ReactMarkdown>
+                        </div>
+                      ) : (
+                        <div className="whitespace-pre-wrap break-words text-gray-100">
+                          {msg.content}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
 
             {isTyping && (
-              <div className="flex flex-col">
+              <div className="flex flex-col mt-4">
                 <div className="flex items-baseline gap-2 mb-1">
                   <span className="text-sm font-medium text-green-400">{botName}</span>
                   <span className="text-xs text-gray-500">typing...</span>
@@ -578,6 +696,102 @@ export default function ChatPage() {
         {/* Input Area */}
         <div className="border-t border-gray-800 px-4 py-4">
           <div className="max-w-3xl mx-auto">
+            {/* Persona Selector */}
+            <div className="mb-3 relative" ref={personaDropdownRef}>
+              <button
+                onClick={() => setPersonaDropdownOpen(!personaDropdownOpen)}
+                className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded-lg hover:bg-gray-750 transition text-sm"
+              >
+                <span
+                  className="w-3 h-3 rounded-full"
+                  style={{ backgroundColor: selectedPersona?.color || "#818cf8" }}
+                />
+                <span className="text-gray-200">{currentSenderName}</span>
+                <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              {personaDropdownOpen && (
+                <div className="absolute bottom-full mb-2 left-0 w-64 bg-gray-800 border border-gray-700 rounded-lg shadow-lg z-10">
+                  {/* Default user option */}
+                  <div
+                    onClick={() => {
+                      setSelectedPersonaId(null);
+                      setPersonaDropdownOpen(false);
+                    }}
+                    className={`flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-700 ${
+                      !selectedPersonaId ? "bg-gray-700" : ""
+                    }`}
+                  >
+                    <span className="w-3 h-3 rounded-full bg-indigo-400" />
+                    <span className="text-gray-200 flex-1">{defaultUserName}</span>
+                    <span className="text-xs text-gray-500">default</span>
+                  </div>
+
+                  {/* Existing personas */}
+                  {personas.map((persona) => (
+                    <div
+                      key={persona.id}
+                      onClick={() => {
+                        setSelectedPersonaId(persona.id);
+                        setPersonaDropdownOpen(false);
+                      }}
+                      className={`group flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-700 ${
+                        selectedPersonaId === persona.id ? "bg-gray-700" : ""
+                      }`}
+                    >
+                      <span
+                        className="w-3 h-3 rounded-full"
+                        style={{ backgroundColor: persona.color }}
+                      />
+                      <span className="text-gray-200 flex-1">{persona.nickname}</span>
+                      <button
+                        onClick={(e) => deletePersona(persona.id, e)}
+                        className="opacity-0 group-hover:opacity-100 p-1 text-gray-500 hover:text-red-400"
+                      >
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+
+                  {/* Create new persona */}
+                  <div className="border-t border-gray-700 p-2">
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={newPersonaName}
+                        onChange={(e) => setNewPersonaName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            if (newPersonaName.trim()) {
+                              createPersona();
+                            } else {
+                              setPersonaDropdownOpen(false);
+                            }
+                          } else if (e.key === "Escape") {
+                            setPersonaDropdownOpen(false);
+                          }
+                        }}
+                        placeholder="New persona name..."
+                        maxLength={32}
+                        className="min-w-0 flex-1 px-2 py-1 bg-gray-900 border border-gray-600 rounded text-sm text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500"
+                      />
+                      <button
+                        onClick={createPersona}
+                        disabled={!newPersonaName.trim() || creatingPersona}
+                        className="flex-shrink-0 px-2 py-1 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700 disabled:opacity-50"
+                      >
+                        Add
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <div className="flex gap-3">
               <div className="flex-1 relative">
                 <textarea

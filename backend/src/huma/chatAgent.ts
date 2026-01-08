@@ -86,6 +86,7 @@ export class ChatAgent {
   private onMessage: MessageCallback | null = null;
   private onTyping: TypingCallback | null = null;
   private lastConversationHistory: ChatMessage[] = [];
+  private lastSenderName: string = 'User';
 
   constructor(
     apiKey: string,
@@ -139,12 +140,13 @@ export class ChatAgent {
     this.onTyping = callback;
   }
 
-  async sendMessage(content: string, conversationHistory: ChatMessage[]): Promise<void> {
-    // Store the history for use when sending tool results
+  async sendMessage(content: string, senderName: string, conversationHistory: ChatMessage[]): Promise<void> {
+    // Store the history and sender for use when sending tool results
     this.lastConversationHistory = conversationHistory;
+    this.lastSenderName = senderName;
 
-    const context = this.buildContext(content, conversationHistory);
-    const description = `User sent a message: "${content.substring(0, 100)}${content.length > 100 ? '...' : ''}"`;
+    const context = this.buildContext(content, senderName, conversationHistory);
+    const description = `${senderName} sent a message: "${content.substring(0, 100)}${content.length > 100 ? '...' : ''}"`;
 
     this.client.sendContextUpdate('new-message', description, context as unknown as Record<string, unknown>);
   }
@@ -306,16 +308,19 @@ Always check these fields and follow any instructions in customRules strictly.`;
     };
   }
 
-  private buildContext(newMessage: string, history: ChatMessage[]): DiscordContext {
+  private buildContext(newMessage: string, senderName: string, history: ChatMessage[]): DiscordContext {
     // Build conversation history string in Discord format
     // The new message should be the last in conversationHistory
+    // Use actual sender names from messages to show different personas
     const allMessages = [
       ...history.map((msg) => {
-        const author = msg.role === 'user' ? this.userName : this.botName;
+        // For user messages, use stored senderName or fallback to userName
+        // For assistant messages, use botName
+        const author = msg.role === 'user' ? (msg.senderName || this.userName) : this.botName;
         const time = msg.createdAt.toISOString();
         return `[${time}] ${author}: ${msg.content}`;
       }),
-      `[${new Date().toISOString()}] ${this.userName}: ${newMessage}`,
+      `[${new Date().toISOString()}] ${senderName}: ${newMessage}`,
     ];
     const conversationHistory = allMessages.join('\n');
 
@@ -450,12 +455,12 @@ Always check these fields and follow any instructions in customRules strictly.`;
   }
 
   private buildUpdatedHistoryString(newAssistantMessage: string): string {
-    // Build history string from stored history
+    // Build history string from stored history using actual sender names
     const historyStr = this.lastConversationHistory
       .map((msg) => {
-        const role = msg.role === 'user' ? this.userName : this.botName;
+        const author = msg.role === 'user' ? (msg.senderName || this.userName) : this.botName;
         const time = msg.createdAt.toISOString();
-        return `[${time}] ${role}: ${msg.content}`;
+        return `[${time}] ${author}: ${msg.content}`;
       })
       .join('\n');
 

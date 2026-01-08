@@ -212,23 +212,27 @@ export class ChatManager {
     }
   }
 
-  private async handleUserMessage(socketId: string, data: { content: string }): Promise<void> {
+  private async handleUserMessage(
+    socketId: string,
+    data: { content: string; senderName?: string }
+  ): Promise<void> {
     const session = this.sessions.get(socketId);
     if (!session) return;
 
-    const { content } = data;
+    const { content, senderName } = data;
     if (!content || typeof content !== 'string' || content.trim().length === 0) {
       session.socket.emit('chat:error', { message: 'Message cannot be empty' });
       return;
     }
 
     try {
-      // Save user message to database
+      // Save user message to database with sender name
       const userMessage = await prisma.chatMessage.create({
         data: {
           conversationId: session.conversationId,
           role: 'user',
           content: content.trim(),
+          senderName: senderName || null,
         },
       });
 
@@ -260,6 +264,7 @@ export class ChatManager {
         id: userMessage.id,
         role: 'user',
         content: userMessage.content,
+        senderName: userMessage.senderName,
         createdAt: userMessage.createdAt,
       });
 
@@ -270,8 +275,8 @@ export class ChatManager {
         take: 50,
       });
 
-      // Send to HUMA agent
-      await session.agent.sendMessage(content.trim(), history);
+      // Send to HUMA agent with sender name
+      await session.agent.sendMessage(content.trim(), senderName || 'User', history);
     } catch (error) {
       console.error('[WebSocket] Message error:', error);
       session.socket.emit('chat:error', { message: 'Failed to send message' });

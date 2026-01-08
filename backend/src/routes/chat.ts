@@ -5,6 +5,143 @@ import { getOrCreateUser } from '../middleware/clerk.js';
 
 const router = Router();
 
+// Preset colors for personas (auto-assigned)
+const PERSONA_COLORS = [
+  '#818cf8', // indigo
+  '#34d399', // emerald
+  '#f472b6', // pink
+  '#fbbf24', // amber
+  '#60a5fa', // blue
+  '#a78bfa', // violet
+  '#fb923c', // orange
+  '#2dd4bf', // teal
+  '#f87171', // red
+  '#4ade80', // green
+];
+
+// ============================================================================
+// PERSONA ENDPOINTS
+// ============================================================================
+
+// GET /api/chat/personas - List all personas for user
+router.get('/personas', requireAuth(), async (req: Request, res: Response) => {
+  try {
+    const auth = getAuth(req);
+    if (!auth.userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const user = await getOrCreateUser(auth.userId);
+
+    const personas = await prisma.chatPersona.findMany({
+      where: { userId: user.id },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    res.json({
+      success: true,
+      personas: personas.map((p) => ({
+        id: p.id,
+        nickname: p.nickname,
+        color: p.color,
+      })),
+    });
+  } catch (error) {
+    console.error('List personas error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/chat/personas - Create new persona
+router.post('/personas', requireAuth(), async (req: Request, res: Response) => {
+  try {
+    const auth = getAuth(req);
+    if (!auth.userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const user = await getOrCreateUser(auth.userId);
+    const { nickname } = req.body;
+
+    if (!nickname || typeof nickname !== 'string' || nickname.trim().length === 0) {
+      return res.status(400).json({ error: 'Nickname is required' });
+    }
+
+    if (nickname.trim().length > 32) {
+      return res.status(400).json({ error: 'Nickname must be 32 characters or less' });
+    }
+
+    // Count existing personas to pick next color
+    const existingCount = await prisma.chatPersona.count({
+      where: { userId: user.id },
+    });
+
+    const color = PERSONA_COLORS[existingCount % PERSONA_COLORS.length];
+
+    const persona = await prisma.chatPersona.create({
+      data: {
+        userId: user.id,
+        nickname: nickname.trim(),
+        color,
+      },
+    });
+
+    console.log(`[Chat] User ${user.id} created persona: ${persona.nickname}`);
+
+    res.json({
+      success: true,
+      persona: {
+        id: persona.id,
+        nickname: persona.nickname,
+        color: persona.color,
+      },
+    });
+  } catch (error) {
+    console.error('Create persona error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// DELETE /api/chat/personas/:id - Delete persona
+router.delete('/personas/:id', requireAuth(), async (req: Request, res: Response) => {
+  try {
+    const auth = getAuth(req);
+    if (!auth.userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const user = await getOrCreateUser(auth.userId);
+    const { id } = req.params;
+
+    // Verify user owns this persona
+    const existing = await prisma.chatPersona.findFirst({
+      where: {
+        id,
+        userId: user.id,
+      },
+    });
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Persona not found' });
+    }
+
+    await prisma.chatPersona.delete({
+      where: { id },
+    });
+
+    console.log(`[Chat] User ${user.id} deleted persona: ${existing.nickname}`);
+
+    res.json({ success: true, message: 'Persona deleted' });
+  } catch (error) {
+    console.error('Delete persona error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ============================================================================
+// CONVERSATION ENDPOINTS
+// ============================================================================
+
 // GET /api/chat/conversations - List all conversations for user (newest first)
 router.get('/conversations', requireAuth(), async (req: Request, res: Response) => {
   try {
@@ -127,6 +264,7 @@ router.get('/conversations/:id', requireAuth(), async (req: Request, res: Respon
           id: m.id,
           role: m.role,
           content: m.content,
+          senderName: m.senderName,
           createdAt: m.createdAt,
         })),
       },
@@ -184,6 +322,7 @@ router.get('/conversations/:id/messages', requireAuth(), async (req: Request, re
         id: m.id,
         role: m.role,
         content: m.content,
+        senderName: m.senderName,
         createdAt: m.createdAt,
       })),
       hasMore,
@@ -328,6 +467,7 @@ router.get('/conversation', requireAuth(), async (req: Request, res: Response) =
           id: m.id,
           role: m.role,
           content: m.content,
+          senderName: m.senderName,
           createdAt: m.createdAt,
         })),
       },

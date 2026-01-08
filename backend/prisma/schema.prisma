@@ -43,6 +43,9 @@ model User {
   // Web chat conversations (multiple per user)
   chatConversations ChatConversation[]
 
+  // Chat personas for multi-user simulation
+  chatPersonas      ChatPersona[]
+
   @@map("users")
 }
 
@@ -124,8 +127,23 @@ model ChatMessage {
   conversation   ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   role           String           // "user" | "assistant"
   content        String           @db.Text
+  senderName     String?          @map("sender_name") // Persona name at time of sending (for user messages)
   createdAt      DateTime         @default(now()) @map("created_at")
 
   @@index([conversationId, createdAt])
   @@map("chat_messages")
+}
+
+// Personas for multi-user chat simulation
+model ChatPersona {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  nickname  String
+  color     String   // Hex color code for UI display
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("chat_personas")
 }
