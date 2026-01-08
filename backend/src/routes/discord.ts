@@ -78,6 +78,31 @@ router.post('/submit-token', async (req: Request, res: Response) => {
 // AUTHENTICATED ENDPOINTS (require Clerk auth)
 // ============================================================================
 
+// Helper to fetch Discord user info from token
+async function fetchDiscordUserInfo(token: string): Promise<{ username: string; id: string } | null> {
+  try {
+    const response = await fetch('https://discord.com/api/v10/users/@me', {
+      headers: {
+        Authorization: token, // User tokens don't need "Bearer" prefix
+      },
+    });
+
+    if (!response.ok) {
+      console.error(`[Discord API] Failed to fetch user info: ${response.status}`);
+      return null;
+    }
+
+    const data = await response.json();
+    return {
+      username: data.username,
+      id: data.id,
+    };
+  } catch (error) {
+    console.error('[Discord API] Error fetching user info:', error);
+    return null;
+  }
+}
+
 // Claim a Discord token using a claim code
 router.post('/claim-token', requireAuth(), async (req: Request, res: Response) => {
   try {
@@ -115,14 +140,23 @@ router.post('/claim-token', requireAuth(), async (req: Request, res: Response) =
       return res.status(400).json({ error: 'This code has expired. Please generate a new one from the extension.' });
     }
 
+    // Fetch Discord user info to get the actual username
+    const discordUser = await fetchDiscordUserInfo(pending.discordToken);
+    const botName = discordUser?.username || 'Assistant';
+
+    console.log(`[Claim Token] Fetched Discord username: ${botName}`);
+
     // Get or create user in our database
     const user = await getOrCreateUser(auth.userId);
 
-    // Transaction: update user with Discord token and mark pending as claimed
+    // Transaction: update user with Discord token, bot name, and mark pending as claimed
     await prisma.$transaction([
       prisma.user.update({
         where: { id: user.id },
-        data: { discordToken: pending.discordToken }
+        data: {
+          discordToken: pending.discordToken,
+          botName: botName,
+        }
       }),
       prisma.pendingDiscordToken.update({
         where: { id: pending.id },
@@ -133,11 +167,12 @@ router.post('/claim-token', requireAuth(), async (req: Request, res: Response) =
       })
     ]);
 
-    console.log(`[Claim Token] User ${user.id} claimed Discord token with code ${normalizedCode}`);
+    console.log(`[Claim Token] User ${user.id} claimed Discord token with code ${normalizedCode}, bot name: ${botName}`);
 
     res.json({
       success: true,
-      message: 'Discord token claimed successfully'
+      message: 'Discord token claimed successfully',
+      botName: botName
     });
   } catch (error) {
     console.error('Claim token error:', error);
@@ -153,12 +188,25 @@ router.get('/status', requireAuth(), async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const user = await getOrCreateUser(auth.userId);
+    let user = await getOrCreateUser(auth.userId);
+
+    // If user has a Discord token but no botName, fetch it now
+    if (user.discordToken && (!user.botName || user.botName === 'Assistant')) {
+      const discordUser = await fetchDiscordUserInfo(user.discordToken);
+      if (discordUser?.username) {
+        user = await prisma.user.update({
+          where: { id: user.id },
+          data: { botName: discordUser.username },
+        });
+        console.log(`[Status] Updated bot name for user ${user.id}: ${discordUser.username}`);
+      }
+    }
 
     res.json({
       success: true,
       connected: !!user.discordToken,
       botActive: user.discordBotActive,
+      botName: user.botName || 'Assistant',
       user: {
         id: user.id,
         email: user.email

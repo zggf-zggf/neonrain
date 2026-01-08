@@ -70,18 +70,31 @@ export interface ServerEvent {
   code?: string;
 }
 
-// Web chat context (simpler than Discord)
-export interface WebChatContext {
-  platform: 'web_chat';
-  user: {
+// Discord-compatible context structure
+// Used by both Discord bot and web chat to ensure consistent behavior
+export interface DiscordContext {
+  guild: {
     id: string;
     name: string;
   };
-  conversationHistory: string;
-  newMessage: {
-    author: string;
-    content: string;
+  you: {
+    name: string;
   };
+  currentChannel: {
+    id: string;
+    name: string;
+    conversationHistory: string;
+  };
+  monitoredChannels: Array<{
+    id: string;
+    name: string;
+    recentMessages?: string;
+  }>;
+  allChannels: Array<{
+    id: string;
+    name: string;
+    type: string;
+  }>;
   userInformation?: string;
   customRules?: string;
   customPersonality?: string;

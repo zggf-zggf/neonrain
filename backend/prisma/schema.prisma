@@ -29,6 +29,7 @@ model User {
   personality       String?  @default("") @map("personality")
   rules             String?  @default("") @map("rules")
   information       String?  @default("") @map("information")
+  botName           String?  @default("Assistant") @map("bot_name")
 
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
@@ -39,8 +40,8 @@ model User {
   messagesSentCount     Int       @default(0) @map("messages_sent_count")
   messagesReceivedCount Int       @default(0) @map("messages_received_count")
 
-  // Web chat conversation (one per user)
-  chatConversation  ChatConversation?
+  // Web chat conversations (multiple per user)
+  chatConversations ChatConversation[]
 
   @@map("users")
 }
@@ -106,12 +107,14 @@ model PendingDiscordToken {
 
 model ChatConversation {
   id        String        @id @default(uuid())
-  userId    String        @unique @map("user_id")
+  userId    String        @map("user_id")
   user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String        @default("New conversation")
   messages  ChatMessage[]
   createdAt DateTime      @default(now()) @map("created_at")
   updatedAt DateTime      @updatedAt @map("updated_at")
 
+  @@index([userId, updatedAt(sort: Desc)])
   @@map("chat_conversations")
 }
 

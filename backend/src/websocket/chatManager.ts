@@ -14,7 +14,8 @@ interface UserSession {
 
 export class ChatManager {
   private io: SocketIOServer;
-  private sessions: Map<string, UserSession> = new Map(); // clerkUserId -> session
+  // Changed: keyed by socket.id to allow multiple tabs per user
+  private sessions: Map<string, UserSession> = new Map();
   private humaApiKey: string;
 
   constructor(httpServer: Server, humaApiKey: string) {
@@ -45,8 +46,9 @@ export class ChatManager {
           return next(new Error('Invalid token'));
         }
 
-        // Attach user ID to socket
+        // Attach user ID and conversationId to socket
         (socket as any).clerkUserId = payload.sub;
+        (socket as any).conversationId = socket.handshake.auth.conversationId || null;
         next();
       } catch (error) {
         console.error('[WebSocket] Auth error:', error);
@@ -59,18 +61,12 @@ export class ChatManager {
 
   private async handleConnection(socket: Socket): Promise<void> {
     const clerkUserId = (socket as any).clerkUserId;
-    console.log(`[WebSocket] User connected: ${clerkUserId}`);
+    const requestedConversationId = (socket as any).conversationId;
+    console.log(
+      `[WebSocket] User connected: ${clerkUserId}, socket: ${socket.id}, conversation: ${requestedConversationId || 'new'}`
+    );
 
     try {
-      // If user already has a session, disconnect the old one
-      const existingSession = this.sessions.get(clerkUserId);
-      if (existingSession) {
-        console.log(`[WebSocket] Disconnecting existing session for ${clerkUserId}`);
-        existingSession.agent.disconnect();
-        existingSession.socket.disconnect();
-        this.sessions.delete(clerkUserId);
-      }
-
       // Get user and their configuration
       const user = await prisma.user.findUnique({
         where: { clerkUserId },
@@ -84,14 +80,6 @@ export class ChatManager {
                     take: 1,
                   },
                 },
-              },
-            },
-          },
-          chatConversation: {
-            include: {
-              messages: {
-                orderBy: { createdAt: 'asc' },
-                take: 50,
               },
             },
           },
@@ -114,16 +102,51 @@ export class ChatManager {
       }
 
       // Get or create conversation
-      let conversation = user.chatConversation;
-      if (!conversation) {
-        conversation = await prisma.chatConversation.create({
-          data: { userId: user.id },
+      let conversation;
+
+      if (requestedConversationId) {
+        // Validate the conversation belongs to this user
+        conversation = await prisma.chatConversation.findFirst({
+          where: {
+            id: requestedConversationId,
+            userId: user.id,
+          },
           include: {
             messages: {
               orderBy: { createdAt: 'asc' },
+              take: 50,
             },
           },
         });
+
+        if (!conversation) {
+          socket.emit('chat:error', { message: 'Conversation not found' });
+          socket.disconnect();
+          return;
+        }
+      } else {
+        // No conversation specified - get most recent or create new
+        conversation = await prisma.chatConversation.findFirst({
+          where: { userId: user.id },
+          orderBy: { updatedAt: 'desc' },
+          include: {
+            messages: {
+              orderBy: { createdAt: 'asc' },
+              take: 50,
+            },
+          },
+        });
+
+        if (!conversation) {
+          conversation = await prisma.chatConversation.create({
+            data: { userId: user.id, title: 'New conversation' },
+            include: {
+              messages: {
+                orderBy: { createdAt: 'asc' },
+              },
+            },
+          });
+        }
       }
 
       // Build websites data
@@ -135,11 +158,12 @@ export class ChatManager {
           scrapedAt: w.scrapes[0]?.scrapedAt?.toISOString() || '',
         })) || [];
 
-      // Create chat agent
+      // Create chat agent with conversation-specific ID
       const agent = new ChatAgent(
         this.humaApiKey,
-        user.id,
+        conversation.id, // Use conversation ID for agent (not user ID)
         user.email || 'User',
+        user.botName || 'Assistant', // Bot name from user config
         {
           personality: user.personality || '',
           rules: user.rules || '',
@@ -148,9 +172,9 @@ export class ChatManager {
         websites
       );
 
-      // Set up agent callbacks
+      // Set up agent callbacks - use socket.id to find session
       agent.setMessageCallback(async (message) => {
-        await this.handleAgentMessage(clerkUserId, message);
+        await this.handleAgentMessage(socket.id, message);
       });
 
       agent.setTypingCallback((isTyping) => {
@@ -160,7 +184,7 @@ export class ChatManager {
       // Initialize HUMA connection
       await agent.initialize();
 
-      // Store session
+      // Store session keyed by socket.id (allows multiple tabs)
       const session: UserSession = {
         socket,
         agent,
@@ -168,27 +192,28 @@ export class ChatManager {
         dbUserId: user.id,
         conversationId: conversation.id,
       };
-      this.sessions.set(clerkUserId, session);
+      this.sessions.set(socket.id, session);
 
-      // Handle events
-      socket.on('chat:message', (data) => this.handleUserMessage(clerkUserId, data));
-      socket.on('chat:cancel', () => this.handleCancel(clerkUserId));
-      socket.on('disconnect', () => this.handleDisconnect(clerkUserId));
+      // Handle events - use socket.id instead of clerkUserId
+      socket.on('chat:message', (data) => this.handleUserMessage(socket.id, data));
+      socket.on('chat:cancel', () => this.handleCancel(socket.id));
+      socket.on('disconnect', () => this.handleDisconnect(socket.id));
 
-      // Send ready event
-      socket.emit('chat:ready', { conversationId: conversation.id });
+      // Send ready event with conversation details
+      socket.emit('chat:ready', {
+        conversationId: conversation.id,
+        title: conversation.title,
+      });
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       console.error('[WebSocket] Connection error:', error);
-      socket.emit('chat:error', { message: 'Failed to initialize chat' });
+      socket.emit('chat:error', { message: `Failed to initialize chat: ${errorMessage}` });
       socket.disconnect();
     }
   }
 
-  private async handleUserMessage(
-    clerkUserId: string,
-    data: { content: string }
-  ): Promise<void> {
-    const session = this.sessions.get(clerkUserId);
+  private async handleUserMessage(socketId: string, data: { content: string }): Promise<void> {
+    const session = this.sessions.get(socketId);
     if (!session) return;
 
     const { content } = data;
@@ -206,6 +231,29 @@ export class ChatManager {
           content: content.trim(),
         },
       });
+
+      // Update conversation's updatedAt and potentially title
+      const conversation = await prisma.chatConversation.findUnique({
+        where: { id: session.conversationId },
+        select: { title: true },
+      });
+
+      // Auto-generate title from first message if still default
+      if (conversation?.title === 'New conversation') {
+        const newTitle = content.trim().slice(0, 50) + (content.length > 50 ? '...' : '');
+        await prisma.chatConversation.update({
+          where: { id: session.conversationId },
+          data: { title: newTitle },
+        });
+        // Notify client of title change
+        session.socket.emit('chat:title-updated', { title: newTitle });
+      } else {
+        // Just touch updatedAt
+        await prisma.chatConversation.update({
+          where: { id: session.conversationId },
+          data: { updatedAt: new Date() },
+        });
+      }
 
       // Echo back to client
       session.socket.emit('chat:message', {
@@ -230,8 +278,8 @@ export class ChatManager {
     }
   }
 
-  private async handleAgentMessage(clerkUserId: string, message: string): Promise<void> {
-    const session = this.sessions.get(clerkUserId);
+  private async handleAgentMessage(socketId: string, message: string): Promise<void> {
+    const session = this.sessions.get(socketId);
     if (!session) return;
 
     try {
@@ -242,6 +290,12 @@ export class ChatManager {
           role: 'assistant',
           content: message,
         },
+      });
+
+      // Update conversation's updatedAt
+      await prisma.chatConversation.update({
+        where: { id: session.conversationId },
+        data: { updatedAt: new Date() },
       });
 
       // Send to client
@@ -256,19 +310,19 @@ export class ChatManager {
     }
   }
 
-  private handleCancel(clerkUserId: string): void {
-    const session = this.sessions.get(clerkUserId);
+  private handleCancel(socketId: string): void {
+    const session = this.sessions.get(socketId);
     if (session) {
       session.agent.cancelPendingResponse();
     }
   }
 
-  private handleDisconnect(clerkUserId: string): void {
-    const session = this.sessions.get(clerkUserId);
+  private handleDisconnect(socketId: string): void {
+    const session = this.sessions.get(socketId);
     if (session) {
-      console.log(`[WebSocket] User disconnected: ${clerkUserId}`);
+      console.log(`[WebSocket] Socket disconnected: ${socketId} (user: ${session.clerkUserId})`);
       session.agent.disconnect();
-      this.sessions.delete(clerkUserId);
+      this.sessions.delete(socketId);
     }
   }
 
@@ -276,8 +330,8 @@ export class ChatManager {
     console.log('[WebSocket] Shutting down chat manager...');
 
     // Disconnect all agents
-    for (const [clerkUserId, session] of this.sessions) {
-      console.log(`[WebSocket] Disconnecting user: ${clerkUserId}`);
+    for (const [socketId, session] of this.sessions) {
+      console.log(`[WebSocket] Disconnecting socket: ${socketId}`);
       session.agent.disconnect();
       session.socket.disconnect(true);
     }
