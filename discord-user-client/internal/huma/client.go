@@ -33,6 +33,7 @@ type Client struct {
 	namespaceReady   bool // True after "40" response received
 	onToolCall       ToolCallHandler
 	onCancelToolCall func(toolCallID, reason string)
+	onConnectionDead func() // Called when connection dies unexpectedly
 	stopChan         chan struct{}
 	doneChan         chan struct{}
 	readyChan        chan struct{} // Signals namespace is ready
@@ -200,6 +201,11 @@ func (c *Client) SetCancelToolCallHandler(handler func(toolCallID, reason string
 	c.onCancelToolCall = handler
 }
 
+// SetConnectionDeadHandler sets the callback for when the connection dies unexpectedly
+func (c *Client) SetConnectionDeadHandler(handler func()) {
+	c.onConnectionDead = handler
+}
+
 // SendContextUpdate sends a context update event to HUMA
 func (c *Client) SendContextUpdate(eventName, description string, context map[string]interface{}) error {
 	c.mu.RLock()
@@ -350,6 +356,10 @@ func (c *Client) readMessages() {
 					return
 				}
 				log.Printf("[HUMA] Error reading message: %v", err)
+				// Notify that connection is dead (timeout, reset, etc.)
+				if c.onConnectionDead != nil {
+					go c.onConnectionDead()
+				}
 				return
 			}
 

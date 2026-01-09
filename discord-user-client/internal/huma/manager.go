@@ -250,6 +250,12 @@ func (m *Manager) GetOrCreateAgent(guildID, guildName, userID string) (*GuildAge
 		agent.handleCancelToolCall(toolCallID, reason)
 	})
 
+	// Handle connection death (timeout, reset, etc.) - remove agent so next message triggers reconnect
+	client.SetConnectionDeadHandler(func() {
+		log.Printf("[HUMA-Manager] Connection dead for guild %s, removing agent", guildID)
+		m.RemoveAgent(guildID)
+	})
+
 	m.agents[guildID] = agent
 	log.Printf("[HUMA-Manager] Created agent for guild %s (%s)", guildName, guildID)
 
