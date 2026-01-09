@@ -100,3 +100,33 @@ func (c *Client) ReportStats(userID, guildID, event string) error {
 
 	return nil
 }
+
+// ReportAgentAction sends an agent action with message history to the backend
+func (c *Client) ReportAgentAction(action types.AgentActionPayload) error {
+	payload, err := json.Marshal(action)
+	if err != nil {
+		return fmt.Errorf("failed to marshal action: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", c.baseURL+"/api/discord/agent-action", nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("X-API-Key", c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Body = io.NopCloser(strings.NewReader(string(payload)))
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send agent action: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("backend returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}

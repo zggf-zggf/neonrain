@@ -218,3 +218,37 @@ export async function getChatMessages(
 export async function clearChatConversation(token: string): Promise<{ success: boolean }> {
   return fetchWithAuth('/api/chat/conversation', token, { method: 'DELETE' });
 }
+
+// Agent Actions
+export interface MessageHistoryEntry {
+  author: string;
+  authorId: string;
+  content: string;
+  timestamp: string;
+}
+
+export interface AgentActionMessageHistory {
+  preceding: MessageHistoryEntry[];
+  agentResponse: MessageHistoryEntry;
+}
+
+export interface AgentAction {
+  id: string;
+  channelId: string;
+  channelName: string;
+  agentMessage: string;
+  triggerDescription: string;
+  messageHistory: AgentActionMessageHistory;
+  createdAt: string;
+}
+
+export async function getAgentActions(
+  token: string,
+  configId: string,
+  limit?: number
+): Promise<{ success: boolean; actions: AgentAction[] }> {
+  const params = new URLSearchParams();
+  if (limit) params.set('limit', limit.toString());
+  const query = params.toString();
+  return fetchWithAuth(`/api/server-configs/${configId}/actions${query ? `?${query}` : ''}`, token);
+}

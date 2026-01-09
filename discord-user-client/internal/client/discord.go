@@ -402,7 +402,7 @@ func (dc *DiscordClient) processMessageWithHUMA(msg *discordgo.MessageCreate) {
 		return
 	}
 
-	agent, err := dc.humaManager.GetOrCreateAgent(guildID, guildName)
+	agent, err := dc.humaManager.GetOrCreateAgent(guildID, guildName, userID)
 	if err != nil {
 		log.Printf("[HUMA] Error getting/creating agent: %v", err)
 		return
@@ -436,7 +436,7 @@ func (dc *DiscordClient) processMessageWithHUMA(msg *discordgo.MessageCreate) {
 			dc.humaManager.RemoveAgent(guildID)
 
 			// Reconnect and retry once
-			agent, err = dc.humaManager.GetOrCreateAgent(guildID, guildName)
+			agent, err = dc.humaManager.GetOrCreateAgent(guildID, guildName, userID)
 			if err != nil {
 				log.Printf("[HUMA] Failed to reconnect: %v", err)
 				return

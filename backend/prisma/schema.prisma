@@ -69,10 +69,36 @@ model UserServerConfig {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   server Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
 
+  agentActions AgentAction[]
+
   @@unique([userId, serverId])
   @@index([userId])
   @@index([serverId])
   @@map("user_server_configs")
+}
+
+model AgentAction {
+  id                 String           @id @default(cuid())
+  userServerConfigId String           @map("user_server_config_id")
+  userServerConfig   UserServerConfig @relation(fields: [userServerConfigId], references: [id], onDelete: Cascade)
+
+  channelId   String @map("channel_id")
+  channelName String @map("channel_name")
+
+  // The agent's response
+  agentMessage String @map("agent_message") @db.Text
+
+  // Context that triggered the response
+  triggerDescription String @map("trigger_description") @db.Text
+
+  // Message history (10 messages before + agent response)
+  messageHistory Json @map("message_history")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userServerConfigId])
+  @@index([createdAt])
+  @@map("agent_actions")
 }
 
 model ServerWebsite {

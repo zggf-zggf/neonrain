@@ -13,7 +13,9 @@ import {
   removeServerWebsite,
   rescrapeWebsite,
   getWebsiteStatus,
+  getAgentActions,
   Website,
+  AgentAction,
 } from "@/lib/api";
 
 interface ServerConfigData {
@@ -44,6 +46,22 @@ function formatTimeAgo(dateString: string | null): string {
   return `${Math.floor(seconds / 86400)} days ago`;
 }
 
+function formatMessageTimestamp(dateString: string): string {
+  const date = new Date(dateString);
+  const now = new Date();
+  const isToday = date.toDateString() === now.toDateString();
+
+  const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  if (isToday) {
+    return timeStr;
+  }
+
+  // Include date for older messages
+  const dateStr = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  return `${dateStr} ${timeStr}`;
+}
+
 export default function ServerConfigPage() {
   const params = useParams();
   const router = useRouter();
@@ -72,6 +90,12 @@ export default function ServerConfigPage() {
   const [newWebsiteName, setNewWebsiteName] = useState("");
   const [scrapingWebsiteId, setScrapingWebsiteId] = useState<string | null>(null);
 
+  // Agent actions state
+  const [agentActions, setAgentActions] = useState<AgentAction[]>([]);
+  const [loadingActions, setLoadingActions] = useState(false);
+  const [expandedActionId, setExpandedActionId] = useState<string | null>(null);
+  const [copiedActionId, setCopiedActionId] = useState<string | null>(null);
+
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
@@ -99,12 +123,51 @@ export default function ServerConfigPage() {
         information: config.information,
       });
 
-      // Load websites
-      await loadWebsites(token, config.guildId);
+      // Load websites and agent actions in parallel
+      await Promise.all([
+        loadWebsites(token, config.guildId),
+        loadAgentActions(token)
+      ]);
     } catch (err: any) {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadAgentActions(token?: string) {
+    const t = token || await getToken();
+    if (!t) return;
+
+    setLoadingActions(true);
+    try {
+      const result = await getAgentActions(t, configId, 5);
+      setAgentActions(result.actions || []);
+    } catch (err) {
+      console.error("Failed to load agent actions:", err);
+    } finally {
+      setLoadingActions(false);
+    }
+  }
+
+  async function copyActionToClipboard(action: AgentAction) {
+    const preceding = action.messageHistory?.preceding || [];
+    const botName = serverConfig?.botName || 'Bot';
+
+    let markdown = `## #${action.channelName}\n\n`;
+
+    for (const msg of preceding) {
+      markdown += `**${msg.author}:** ${msg.content}\n\n`;
+    }
+
+    markdown += `**${botName}:** ${action.agentMessage}\n`;
+
+    try {
+      await navigator.clipboard.writeText(markdown);
+      setCopiedActionId(action.id);
+      setTimeout(() => setCopiedActionId(null), 2000);
+    } catch (err) {
+      console.error("Failed to copy:", err);
     }
   }
 
@@ -429,6 +492,123 @@ export default function ServerConfigPage() {
             </div>
           </div>
         </div>
+      </section>
+
+      {/* Recent Agent Actions */}
+      <section className="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-6">
+        <h2 className="text-xl font-semibold text-white mb-2">Recent Agent Actions</h2>
+        <p className="text-gray-400 text-sm mb-4">
+          Messages sent by your AI agent with conversation context.
+        </p>
+
+        {loadingActions ? (
+          <p className="text-gray-400">Loading actions...</p>
+        ) : agentActions.length === 0 ? (
+          <div className="text-center py-8">
+            <p className="text-gray-500">No agent actions yet.</p>
+            <p className="text-gray-600 text-sm mt-1">
+              Actions will appear here when your bot responds to messages.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {agentActions.map((action) => {
+              const isExpanded = expandedActionId === action.id;
+              const preceding = action.messageHistory?.preceding || [];
+              const displayMessages = isExpanded ? preceding : preceding.slice(-3);
+
+              return (
+                <div
+                  key={action.id}
+                  className="bg-gray-800 rounded-lg overflow-hidden cursor-pointer hover:bg-gray-750 transition"
+                  onClick={() => setExpandedActionId(isExpanded ? null : action.id)}
+                >
+                  <div className="p-4">
+                    {/* Header */}
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 bg-indigo-400 rounded-full" />
+                        <span className="text-white font-medium">#{action.channelName}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-500 text-xs">{formatTimeAgo(action.createdAt)}</span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            copyActionToClipboard(action);
+                          }}
+                          className="p-1.5 rounded bg-gray-700 hover:bg-gray-600 transition"
+                          title="Copy conversation"
+                        >
+                          {copiedActionId === action.id ? (
+                            <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                            </svg>
+                          ) : (
+                            <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                            </svg>
+                          )}
+                        </button>
+                        <svg
+                          className={`w-4 h-4 text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </div>
+                    </div>
+
+                    {/* Trigger description (only when expanded) */}
+                    {isExpanded && action.triggerDescription && (
+                      <div className="text-xs text-gray-500 mb-3 pb-2 border-b border-gray-700">
+                        Trigger: {action.triggerDescription}
+                      </div>
+                    )}
+
+                    {/* Message history - unified view */}
+                    <div className="space-y-2 text-sm">
+                      {displayMessages.map((msg, idx) => (
+                        <div key={idx} className={isExpanded ? 'flex gap-2' : 'flex gap-2 truncate'}>
+                          <span className="text-gray-500 text-xs whitespace-nowrap flex-shrink-0">
+                            {formatMessageTimestamp(msg.timestamp)}
+                          </span>
+                          <div className={isExpanded ? 'break-words' : 'truncate'}>
+                            <span className="text-gray-400 font-medium">{msg.author}:</span>
+                            <span className="text-gray-300 ml-1">{msg.content}</span>
+                          </div>
+                        </div>
+                      ))}
+
+                      {/* Agent response - highlighted */}
+                      <div className={isExpanded
+                        ? 'flex gap-2 bg-indigo-900/30 -mx-4 px-4 py-2 border-l-2 border-indigo-500'
+                        : 'flex gap-2 bg-indigo-900/30 -mx-4 px-4 py-2 border-l-2 border-indigo-500 truncate'
+                      }>
+                        <span className="text-gray-500 text-xs whitespace-nowrap flex-shrink-0">
+                          {formatMessageTimestamp(action.createdAt)}
+                        </span>
+                        <div className={isExpanded ? 'break-words' : 'truncate'}>
+                          <span className="text-indigo-400 font-medium">{serverConfig?.botName || 'Bot'}:</span>
+                          <span className="text-indigo-200 ml-1">{action.agentMessage}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Expand hint when collapsed */}
+                    {!isExpanded && preceding.length > 3 && (
+                      <div className="text-xs text-gray-500 mt-2 text-center">
+                        Click to see {preceding.length - 3} more message{preceding.length - 3 > 1 ? 's' : ''}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </section>
 
       {/* Websites */}

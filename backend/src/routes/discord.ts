@@ -673,6 +673,56 @@ router.post('/stats', async (req: Request, res: Response) => {
   }
 });
 
+// Record agent action (called by Go service when agent sends a message)
+router.post('/agent-action', async (req: Request, res: Response) => {
+  try {
+    const apiKey = req.headers['x-api-key'];
+    const expectedApiKey = process.env.INTERNAL_API_KEY || 'default-internal-key';
+
+    if (apiKey !== expectedApiKey) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { userId, guildId, channelId, channelName, agentMessage, triggerDescription, messageHistory } = req.body;
+
+    if (!userId || !guildId || !channelId || !agentMessage) {
+      return res.status(400).json({ error: 'userId, guildId, channelId, and agentMessage are required' });
+    }
+
+    // Find the UserServerConfig for this user and guild
+    const config = await prisma.userServerConfig.findFirst({
+      where: {
+        userId,
+        server: { guildId }
+      }
+    });
+
+    if (!config) {
+      return res.json({ success: true, message: 'Server config not found' });
+    }
+
+    // Create the agent action record
+    await prisma.agentAction.create({
+      data: {
+        userServerConfigId: config.id,
+        channelId: channelId,
+        channelName: channelName || 'unknown',
+        agentMessage: agentMessage,
+        triggerDescription: triggerDescription || '',
+        messageHistory: messageHistory || { preceding: [], agentResponse: {} }
+      }
+    });
+
+    res.status(201).json({ success: true });
+  } catch (error: any) {
+    if (error.code === 'P2025') {
+      return res.json({ success: true, message: 'Config not found' });
+    }
+    console.error('Agent action error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Get all Discord tokens (internal endpoint for discord-user-client service)
 // Returns tokens grouped with all server configurations per token
 router.get('/tokens', async (req: Request, res: Response) => {

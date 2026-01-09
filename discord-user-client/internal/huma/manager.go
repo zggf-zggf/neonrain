@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mjacniacki/neonrain/discord-user-client/internal/backend"
 	"github.com/mjacniacki/neonrain/discord-user-client/internal/history"
 	"github.com/mjacniacki/neonrain/discord-user-client/pkg/types"
 )
@@ -110,6 +111,11 @@ type GuildAgent struct {
 	pendingMessage    *PendingMessage
 	pendingMu         sync.Mutex
 	cancelChan        chan struct{}
+
+	// For reporting agent actions
+	backendClient          *backend.Client
+	userID                 string
+	lastTriggerDescription string
 }
 
 // PendingMessage represents a message being typed
@@ -122,15 +128,16 @@ type PendingMessage struct {
 
 // Manager manages HUMA agents for multiple guilds
 type Manager struct {
-	apiKey      string
-	agents      map[string]*GuildAgent // guildID -> agent
-	mu          sync.RWMutex
-	sender      MessageSender
-	history     *history.MessageHistoryManager
-	personality string
-	rules       string
-	information string
-	websites    []types.WebsiteData
+	apiKey        string
+	agents        map[string]*GuildAgent // guildID -> agent
+	mu            sync.RWMutex
+	sender        MessageSender
+	history       *history.MessageHistoryManager
+	personality   string
+	rules         string
+	information   string
+	websites      []types.WebsiteData
+	backendClient *backend.Client
 }
 
 // NewManager creates a new HUMA manager
@@ -171,6 +178,13 @@ func (m *Manager) SetWebsites(websites []types.WebsiteData) {
 	m.websites = websites
 }
 
+// SetBackendClient sets the backend client for reporting agent actions
+func (m *Manager) SetBackendClient(client *backend.Client) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.backendClient = client
+}
+
 // RemoveAgent removes an agent (called when connection is dead)
 func (m *Manager) RemoveAgent(guildID string) {
 	m.mu.Lock()
@@ -184,11 +198,13 @@ func (m *Manager) RemoveAgent(guildID string) {
 }
 
 // GetOrCreateAgent gets an existing agent for a guild or creates a new one
-func (m *Manager) GetOrCreateAgent(guildID, guildName string) (*GuildAgent, error) {
+func (m *Manager) GetOrCreateAgent(guildID, guildName, userID string) (*GuildAgent, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if agent, exists := m.agents[guildID]; exists {
+		// Update userID in case it changed
+		agent.userID = userID
 		return agent, nil
 	}
 
@@ -210,17 +226,19 @@ func (m *Manager) GetOrCreateAgent(guildID, guildName string) (*GuildAgent, erro
 	}
 
 	agent := &GuildAgent{
-		GuildID:     guildID,
-		GuildName:   guildName,
-		Client:      client,
-		AgentID:     agentResp.ID,
-		sender:      m.sender,
-		history:     m.history,
-		personality: m.personality,
-		rules:       m.rules,
-		information: m.information,
-		websites:    m.websites,
-		cancelChan:  make(chan struct{}),
+		GuildID:       guildID,
+		GuildName:     guildName,
+		Client:        client,
+		AgentID:       agentResp.ID,
+		sender:        m.sender,
+		history:       m.history,
+		personality:   m.personality,
+		rules:         m.rules,
+		information:   m.information,
+		websites:      m.websites,
+		cancelChan:    make(chan struct{}),
+		backendClient: m.backendClient,
+		userID:        userID,
 	}
 
 	// Set up tool call handlers
@@ -458,6 +476,9 @@ func (a *GuildAgent) SendNewMessage(channelID, channelName, authorID, authorName
 
 	description := fmt.Sprintf("User %s sent a new message in channel #%s: \"%s\". Review the conversationHistory field to see the full conversation context before responding.",
 		authorName, channelName, truncateString(content, 100))
+
+	// Store trigger description for agent action reporting
+	a.lastTriggerDescription = fmt.Sprintf("User %s in #%s: %s", authorName, channelName, truncateString(content, 200))
 
 	return a.Client.SendContextUpdate("new-message", description, context)
 }
@@ -743,6 +764,9 @@ func (a *GuildAgent) processMessageWithTyping(toolCallID, channelID, message str
 
 			log.Printf("[HUMA-Agent] Message sent successfully (ID: %s)", toolCallID)
 
+			// Report agent action to backend (async)
+			go a.reportAgentAction(channelID, message)
+
 			// Build updated conversation history including the new bot message
 			updatedHistory := a.buildUpdatedConversationHistory(channelID, message)
 			a.Client.SendToolResultWithOptions(toolCallID, true, "Message sent successfully", "", &ToolResultOptions{
@@ -868,4 +892,74 @@ func MarshalContext(ctx map[string]interface{}) string {
 		return fmt.Sprintf("error: %v", err)
 	}
 	return string(data)
+}
+
+// reportAgentAction reports an agent action to the backend
+func (a *GuildAgent) reportAgentAction(channelID, agentMessage string) {
+	if a.backendClient == nil {
+		log.Printf("[HUMA-Agent] Cannot report agent action: no backend client")
+		return
+	}
+
+	if a.userID == "" {
+		log.Printf("[HUMA-Agent] Cannot report agent action: no userID")
+		return
+	}
+
+	// Get current channel name
+	a.currentMu.RLock()
+	channelName := a.currentChannelName
+	a.currentMu.RUnlock()
+
+	// Get message history (last 10 messages before the agent's response)
+	var precedingMessages []types.MessageHistoryEntry
+	if a.history != nil {
+		messages := a.history.GetMessages(channelID)
+		// Get up to last 10 messages
+		startIdx := 0
+		if len(messages) > 10 {
+			startIdx = len(messages) - 10
+		}
+		for i := startIdx; i < len(messages); i++ {
+			msg := messages[i]
+			precedingMessages = append(precedingMessages, types.MessageHistoryEntry{
+				Author:    msg.Author,
+				AuthorID:  msg.AuthorID,
+				Content:   msg.Content,
+				Timestamp: msg.Timestamp,
+			})
+		}
+	}
+
+	// Get bot name for the agent response entry
+	botName := "Bot"
+	if a.sender != nil {
+		botName = a.sender.GetBotUsername()
+	}
+
+	// Build the payload
+	payload := types.AgentActionPayload{
+		UserID:             a.userID,
+		GuildID:            a.GuildID,
+		ChannelID:          channelID,
+		ChannelName:        channelName,
+		AgentMessage:       agentMessage,
+		TriggerDescription: a.lastTriggerDescription,
+		MessageHistory: types.AgentActionMessageHistory{
+			Preceding: precedingMessages,
+			AgentResponse: types.MessageHistoryEntry{
+				Author:    botName,
+				AuthorID:  "", // We don't have the bot's user ID readily available
+				Content:   agentMessage,
+				Timestamp: time.Now().Format(time.RFC3339),
+			},
+		},
+	}
+
+	// Send to backend
+	if err := a.backendClient.ReportAgentAction(payload); err != nil {
+		log.Printf("[HUMA-Agent] Error reporting agent action: %v", err)
+	} else {
+		log.Printf("[HUMA-Agent] Reported agent action for guild %s, channel %s", a.GuildID, channelID)
+	}
 }

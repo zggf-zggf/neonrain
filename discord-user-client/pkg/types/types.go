@@ -61,3 +61,28 @@ type ChannelListInfo struct {
 	Name string `json:"name"`
 	Type int    `json:"type"`
 }
+
+// MessageHistoryEntry represents a single message in the agent action history
+type MessageHistoryEntry struct {
+	Author    string `json:"author"`
+	AuthorID  string `json:"authorId"`
+	Content   string `json:"content"`
+	Timestamp string `json:"timestamp"`
+}
+
+// AgentActionMessageHistory represents the complete message history for an agent action
+type AgentActionMessageHistory struct {
+	Preceding     []MessageHistoryEntry `json:"preceding"`
+	AgentResponse MessageHistoryEntry   `json:"agentResponse"`
+}
+
+// AgentActionPayload represents the data sent when an agent takes an action
+type AgentActionPayload struct {
+	UserID             string                    `json:"userId"`
+	GuildID            string                    `json:"guildId"`
+	ChannelID          string                    `json:"channelId"`
+	ChannelName        string                    `json:"channelName"`
+	AgentMessage       string                    `json:"agentMessage"`
+	TriggerDescription string                    `json:"triggerDescription"`
+	MessageHistory     AgentActionMessageHistory `json:"messageHistory"`
+}

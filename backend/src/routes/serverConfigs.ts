@@ -364,4 +364,54 @@ router.delete('/:configId', requireAuth(), async (req: Request, res: Response) =
   }
 });
 
+// GET /api/server-configs/:configId/actions - Get recent agent actions for a server config
+router.get('/:configId/actions', requireAuth(), async (req: Request, res: Response) => {
+  try {
+    const auth = getAuth(req);
+    if (!auth.userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const user = await getOrCreateUser(auth.userId);
+    const { configId } = req.params;
+    const limit = Math.min(parseInt(req.query.limit as string) || 5, 20);
+
+    // Verify ownership
+    const config = await prisma.userServerConfig.findUnique({
+      where: { id: configId }
+    });
+
+    if (!config) {
+      return res.status(404).json({ error: 'Server configuration not found' });
+    }
+
+    if (config.userId !== user.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Fetch recent agent actions
+    const actions = await prisma.agentAction.findMany({
+      where: { userServerConfigId: configId },
+      orderBy: { createdAt: 'desc' },
+      take: limit
+    });
+
+    res.json({
+      success: true,
+      actions: actions.map(a => ({
+        id: a.id,
+        channelId: a.channelId,
+        channelName: a.channelName,
+        agentMessage: a.agentMessage,
+        triggerDescription: a.triggerDescription,
+        messageHistory: a.messageHistory,
+        createdAt: a.createdAt
+      }))
+    });
+  } catch (error) {
+    console.error('Get agent actions error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 export default router;

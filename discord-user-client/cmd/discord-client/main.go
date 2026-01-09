@@ -46,6 +46,9 @@ func main() {
 	// Initialize backend client
 	backendClient := backend.NewClient(backendURL, apiKey)
 
+	// Set backend client on HUMA manager for agent action reporting
+	humaManager.SetBackendClient(backendClient)
+
 	pollInterval := 2 * time.Second
 	log.Printf("Starting Discord client service with HUMA integration")
 	log.Printf("Backend URL: %s", backendURL)
