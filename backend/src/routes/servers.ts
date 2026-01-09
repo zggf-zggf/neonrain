@@ -16,13 +16,23 @@ function isValidUrl(urlString: string): boolean {
   }
 }
 
-// Helper to check if user owns the server (has it selected)
-async function verifyServerAccess(userId: string, guildId: string): Promise<boolean> {
+// Helper to check if user has a server configuration for this guild
+async function verifyServerAccess(clerkUserId: string, guildId: string): Promise<boolean> {
   const user = await prisma.user.findUnique({
-    where: { clerkUserId: userId },
-    select: { selectedGuildId: true }
+    where: { clerkUserId },
+    select: { id: true }
   });
-  return user?.selectedGuildId === guildId;
+
+  if (!user) return false;
+
+  const config = await prisma.userServerConfig.findFirst({
+    where: {
+      userId: user.id,
+      server: { guildId }
+    }
+  });
+
+  return !!config;
 }
 
 // GET /api/servers/:guildId/websites - List all websites for a server
@@ -163,10 +173,11 @@ router.post('/:guildId/websites', requireAuth(), async (req: Request, res: Respo
     });
 
     if (!server) {
+      // Server should exist if verifyServerAccess passed, but create with guildId as fallback name
       server = await prisma.server.create({
         data: {
           guildId,
-          guildName: user.selectedGuildName || 'Unknown Server'
+          guildName: guildId // Will be updated when user configures the server properly
         }
       });
     }

@@ -4,6 +4,7 @@ import cors from 'cors';
 import { clerkMiddleware } from '@clerk/express';
 import discordRoutes from './routes/discord.js';
 import serverRoutes from './routes/servers.js';
+import serverConfigsRoutes from './routes/serverConfigs.js';
 import chatRoutes from './routes/chat.js';
 import { scheduler, tokenCleanupJob, websiteScrapeJob } from './jobs/index.js';
 import { ChatManager } from './websocket/chatManager.js';
@@ -36,6 +37,7 @@ app.use((req, res, next) => {
 // Routes
 app.use('/api/discord', discordRoutes);
 app.use('/api/servers', serverRoutes);
+app.use('/api/server-configs', serverConfigsRoutes);
 app.use('/api/chat', chatRoutes);
 
 // Health check endpoint

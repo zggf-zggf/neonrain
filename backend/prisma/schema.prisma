@@ -11,41 +11,23 @@ datasource db {
 }
 
 model User {
-  id               String   @id @default(uuid())
-  clerkUserId      String   @unique @map("clerk_user_id")
-  email            String?
-  discordToken      String?  @map("discord_token")
-  selectedGuildId   String?  @map("selected_guild_id")
-  selectedGuildName String?  @map("selected_guild_name")
+  id           String  @id @default(uuid())
+  clerkUserId  String  @unique @map("clerk_user_id")
+  email        String?
+  discordToken String? @map("discord_token")
 
-  // Controls whether Discord bot is active (separate from web chat)
-  discordBotActive  Boolean  @default(false) @map("discord_bot_active")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  // Server relation (for website scraping feature)
-  serverId          String?  @map("server_id")
-  server            Server?  @relation(fields: [serverId], references: [id])
-
-  // Agent configuration
-  personality       String?  @default("") @map("personality")
-  rules             String?  @default("") @map("rules")
-  information       String?  @default("") @map("information")
-  botName           String?  @default("Assistant") @map("bot_name")
-
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-
-  // Agent stats
-  lastMessageSentAt     DateTime? @map("last_message_sent_at")
-  lastMessageReceivedAt DateTime? @map("last_message_received_at")
-  messagesSentCount     Int       @default(0) @map("messages_sent_count")
-  messagesReceivedCount Int       @default(0) @map("messages_received_count")
+  // Server configurations (one per server)
+  serverConfigs UserServerConfig[]
 
   // Web chat conversation groups and conversations
   chatConversationGroups ChatConversationGroup[]
   chatConversations      ChatConversation[]
 
   // Chat personas for multi-user simulation
-  chatPersonas      ChatPersona[]
+  chatPersonas ChatPersona[]
 
   @@map("users")
 }
@@ -55,13 +37,42 @@ model Server {
   guildId   String   @unique @map("guild_id")
   guildName String   @map("guild_name")
 
-  websites  ServerWebsite[]
-  users     User[]
+  websites               ServerWebsite[]
+  userConfigs            UserServerConfig[]
+  chatConversationGroups ChatConversationGroup[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("servers")
+}
+
+model UserServerConfig {
+  id       String @id @default(uuid())
+  userId   String @map("user_id")
+  serverId String @map("server_id")
+
+  botName     String  @default("Assistant") @map("bot_name")
+  personality String  @default("") @db.Text
+  rules       String  @default("") @db.Text
+  information String  @default("") @db.Text
+  botActive   Boolean @default(false) @map("bot_active")
+
+  messagesSentCount     Int       @default(0) @map("messages_sent_count")
+  messagesReceivedCount Int       @default(0) @map("messages_received_count")
+  lastMessageSentAt     DateTime? @map("last_message_sent_at")
+  lastMessageReceivedAt DateTime? @map("last_message_received_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  server Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, serverId])
+  @@index([userId])
+  @@index([serverId])
+  @@map("user_server_configs")
 }
 
 model ServerWebsite {
@@ -114,6 +125,8 @@ model ChatConversationGroup {
   id            String             @id @default(uuid())
   userId        String             @map("user_id")
   user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  serverId      String?            @map("server_id")
+  server        Server?            @relation(fields: [serverId], references: [id], onDelete: SetNull)
   title         String             @default("New chat")
   paneCount     Int                @map("pane_count") // 1, 3, or 5
   conversations ChatConversation[]
@@ -121,6 +134,7 @@ model ChatConversationGroup {
   updatedAt     DateTime           @updatedAt @map("updated_at")
 
   @@index([userId, updatedAt(sort: Desc)])
+  @@index([serverId])
   @@map("chat_conversation_groups")
 }
 

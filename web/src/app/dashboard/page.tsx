@@ -6,20 +6,10 @@ import Link from "next/link";
 import {
   getDiscordStatus,
   disconnectDiscord,
-  getAgentConfig,
-  saveAgentConfig,
   getGuilds,
-  getSelectedGuild,
-  saveSelectedGuild,
-  removeSelectedGuild,
-  getServerWebsites,
-  addServerWebsite,
-  removeServerWebsite,
-  rescrapeWebsite,
-  getWebsiteStatus,
-  setDiscordBotStatus,
-  AgentConfig,
-  Website,
+  getServerConfigs,
+  addServerConfig,
+  ServerConfig,
 } from "@/lib/api";
 
 interface Guild {
@@ -27,16 +17,9 @@ interface Guild {
   name: string;
 }
 
-interface SelectedGuild {
-  id: string;
-  name: string;
-}
-
-interface Stats {
-  lastMessageSentAt: string | null;
-  lastMessageReceivedAt: string | null;
-  messagesSentCount: number;
-  messagesReceivedCount: number;
+interface AggregatedStats {
+  totalMessagesSent: number;
+  totalMessagesReceived: number;
 }
 
 function formatTimeAgo(dateString: string | null): string {
@@ -56,35 +39,21 @@ export default function DashboardPage() {
   const { isLoaded: isUserLoaded } = useUser();
   const [loading, setLoading] = useState(true);
   const [discordConnected, setDiscordConnected] = useState(false);
-  const [discordBotActive, setDiscordBotActive] = useState(false);
-  const [togglingBot, setTogglingBot] = useState(false);
-  const [selectedGuild, setSelectedGuild] = useState<SelectedGuild | null>(null);
 
-  // Agent config state
-  const [config, setConfig] = useState<AgentConfig>({ personality: "", rules: "", information: "" });
-  const [savedConfig, setSavedConfig] = useState<AgentConfig>({ personality: "", rules: "", information: "" });
-  const [savingConfig, setSavingConfig] = useState(false);
+  // Server configs
+  const [serverConfigs, setServerConfigs] = useState<ServerConfig[]>([]);
+  const [stats, setStats] = useState<AggregatedStats | null>(null);
 
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
-  const [stats, setStats] = useState<Stats | null>(null);
-
-  // Server selection state
-  const [selectingServer, setSelectingServer] = useState(false);
+  // Add server flow
+  const [addingServer, setAddingServer] = useState(false);
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [loadingGuilds, setLoadingGuilds] = useState(false);
   const [savingServer, setSavingServer] = useState(false);
 
-  // Website state
-  const [websites, setWebsites] = useState<Website[]>([]);
-  const [loadingWebsites, setLoadingWebsites] = useState(false);
-  const [addingWebsite, setAddingWebsite] = useState(false);
-  const [newWebsiteUrl, setNewWebsiteUrl] = useState("");
-  const [newWebsiteName, setNewWebsiteName] = useState("");
-  const [scrapingWebsiteId, setScrapingWebsiteId] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
 
   useEffect(() => {
-    // Wait for Clerk to be fully loaded before fetching data
     if (isAuthLoaded && isUserLoaded) {
       loadData();
     }
@@ -95,24 +64,14 @@ export default function DashboardPage() {
       const token = await getToken();
       if (!token) return;
 
-      const [statusRes, configRes] = await Promise.all([
+      const [statusRes, configsRes] = await Promise.all([
         getDiscordStatus(token),
-        getAgentConfig(token).catch(() => ({ config: { personality: "", rules: "", information: "" } })),
+        getServerConfigs(token).catch(() => ({ servers: [] })),
       ]);
 
       setDiscordConnected(statusRes.connected);
-      setDiscordBotActive(statusRes.botActive || false);
-      setSelectedGuild(statusRes.selectedGuild || null);
+      setServerConfigs(configsRes.servers || []);
 
-      const loadedConfig = {
-        personality: configRes.config?.personality || "",
-        rules: configRes.config?.rules || "",
-        information: configRes.config?.information || "",
-      };
-      setConfig(loadedConfig);
-      setSavedConfig(loadedConfig);
-
-      // Set stats from status response
       if (statusRes.stats) {
         setStats(statusRes.stats);
       }
@@ -130,8 +89,7 @@ export default function DashboardPage() {
 
       await disconnectDiscord(token);
       setDiscordConnected(false);
-      setDiscordBotActive(false);
-      setSelectedGuild(null);
+      setServerConfigs([]);
       setSuccess("Discord disconnected");
       setTimeout(() => setSuccess(""), 3000);
     } catch (err: any) {
@@ -139,49 +97,8 @@ export default function DashboardPage() {
     }
   }
 
-  async function handleToggleBot() {
-    setTogglingBot(true);
-    setError("");
-    try {
-      const token = await getToken();
-      if (!token) return;
-
-      const newActive = !discordBotActive;
-      const res = await setDiscordBotStatus(token, newActive);
-      setDiscordBotActive(res.active);
-      setSuccess(res.active ? "Discord bot activated" : "Discord bot deactivated");
-      setTimeout(() => setSuccess(""), 3000);
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setTogglingBot(false);
-    }
-  }
-
-  async function handleSaveConfig() {
-    setSavingConfig(true);
-    setError("");
-    try {
-      const token = await getToken();
-      if (!token) return;
-
-      await saveAgentConfig(token, config);
-      setSavedConfig(config);
-      setSuccess("Configuration saved successfully");
-      setTimeout(() => setSuccess(""), 3000);
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  const hasConfigChanges = config.personality !== savedConfig.personality ||
-    config.rules !== savedConfig.rules ||
-    config.information !== savedConfig.information;
-
-  async function startSelectingServer() {
-    setSelectingServer(true);
+  async function startAddingServer() {
+    setAddingServer(true);
     setLoadingGuilds(true);
     setError("");
 
@@ -190,7 +107,12 @@ export default function DashboardPage() {
       if (!token) return;
 
       const guildsData = await getGuilds(token);
-      setGuilds(guildsData || []);
+      // Filter out guilds that are already configured
+      const configuredGuildIds = new Set(serverConfigs.map(c => c.guildId));
+      const availableGuilds = (guildsData || []).filter(
+        (g: Guild) => !configuredGuildIds.has(g.id)
+      );
+      setGuilds(availableGuilds);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -198,7 +120,7 @@ export default function DashboardPage() {
     }
   }
 
-  async function handleSelectServer(guild: Guild) {
+  async function handleAddServer(guild: Guild) {
     setSavingServer(true);
     setError("");
 
@@ -206,10 +128,10 @@ export default function DashboardPage() {
       const token = await getToken();
       if (!token) return;
 
-      await saveSelectedGuild(token, guild.id, guild.name);
-      setSelectedGuild({ id: guild.id, name: guild.name });
-      setSelectingServer(false);
-      setSuccess(`Now monitoring all channels in ${guild.name}`);
+      const result = await addServerConfig(token, guild.id, guild.name);
+      setServerConfigs([...serverConfigs, result.server]);
+      setAddingServer(false);
+      setSuccess(`Added ${guild.name} - configure it to start monitoring`);
       setTimeout(() => setSuccess(""), 3000);
     } catch (err: any) {
       setError(err.message);
@@ -218,196 +140,12 @@ export default function DashboardPage() {
     }
   }
 
-  async function handleRemoveServer() {
-    setError("");
-
-    try {
-      const token = await getToken();
-      if (!token) return;
-
-      await removeSelectedGuild(token);
-      setSelectedGuild(null);
-      setSuccess("Server removed");
-      setTimeout(() => setSuccess(""), 3000);
-    } catch (err: any) {
-      setError(err.message);
-    }
-  }
-
-  function cancelSelection() {
-    setSelectingServer(false);
+  function cancelAddServer() {
+    setAddingServer(false);
     setGuilds([]);
   }
 
-  // Load websites when selectedGuild changes
-  useEffect(() => {
-    if (selectedGuild) {
-      loadWebsites();
-    } else {
-      setWebsites([]);
-    }
-  }, [selectedGuild?.id]);
-
-  async function loadWebsites() {
-    if (!selectedGuild) return;
-
-    setLoadingWebsites(true);
-    try {
-      const token = await getToken();
-      if (!token) return;
-
-      const result = await getServerWebsites(token, selectedGuild.id);
-      setWebsites(result.websites || []);
-    } catch (err: unknown) {
-      console.error("Failed to load websites:", err);
-    } finally {
-      setLoadingWebsites(false);
-    }
-  }
-
-  async function handleAddWebsite() {
-    if (!selectedGuild || !newWebsiteUrl.trim()) return;
-
-    setAddingWebsite(true);
-    setError("");
-
-    try {
-      const token = await getToken();
-      if (!token) return;
-
-      const result = await addServerWebsite(
-        token,
-        selectedGuild.id,
-        newWebsiteUrl.trim(),
-        newWebsiteName.trim() || undefined
-      );
-
-      const newWebsite = result.website;
-      setWebsites(prev => [...prev, newWebsite]);
-      setNewWebsiteUrl("");
-      setNewWebsiteName("");
-      setSuccess("Website added. Scraping in progress...");
-      setScrapingWebsiteId(newWebsite.id);
-
-      // Poll for initial scrape completion
-      const pollInterval = setInterval(async () => {
-        try {
-          const freshToken = await getToken();
-          if (!freshToken || !selectedGuild) {
-            clearInterval(pollInterval);
-            return;
-          }
-
-          const statusResult = await getWebsiteStatus(freshToken, selectedGuild.id, newWebsite.id);
-          const updatedWebsite = statusResult.website;
-
-          if (updatedWebsite.lastScrapeStatus !== 'pending') {
-            clearInterval(pollInterval);
-            setWebsites(prev => prev.map(w => w.id === newWebsite.id ? updatedWebsite : w));
-            setScrapingWebsiteId(null);
-            if (updatedWebsite.lastScrapeStatus === 'success') {
-              setSuccess("Website scraped successfully!");
-            } else {
-              setError("Initial scrape failed. Check the server logs.");
-            }
-            setTimeout(() => { setSuccess(""); setError(""); }, 3000);
-          }
-        } catch {
-          // Ignore polling errors
-        }
-      }, 2000);
-
-      // Stop polling after 60 seconds
-      setTimeout(() => {
-        clearInterval(pollInterval);
-        if (scrapingWebsiteId === newWebsite.id) {
-          setScrapingWebsiteId(null);
-        }
-      }, 60000);
-
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to add website");
-    } finally {
-      setAddingWebsite(false);
-    }
-  }
-
-  async function handleRemoveWebsite(websiteId: string) {
-    if (!selectedGuild) return;
-
-    try {
-      const token = await getToken();
-      if (!token) return;
-
-      await removeServerWebsite(token, selectedGuild.id, websiteId);
-      setWebsites(websites.filter((w) => w.id !== websiteId));
-      setSuccess("Website removed");
-      setTimeout(() => setSuccess(""), 3000);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to remove website");
-    }
-  }
-
-  async function handleRescrape(websiteId: string) {
-    if (!selectedGuild) return;
-
-    const website = websites.find(w => w.id === websiteId);
-    if (!website) return;
-
-    const previousScrapedAt = website.lastScrapedAt;
-    setScrapingWebsiteId(websiteId);
-
-    try {
-      const token = await getToken();
-      if (!token) return;
-
-      await rescrapeWebsite(token, selectedGuild.id, websiteId);
-      setSuccess("Scraping in progress...");
-
-      // Poll for completion
-      const pollInterval = setInterval(async () => {
-        try {
-          const freshToken = await getToken();
-          if (!freshToken || !selectedGuild) {
-            clearInterval(pollInterval);
-            return;
-          }
-
-          const result = await getWebsiteStatus(freshToken, selectedGuild.id, websiteId);
-          const updatedWebsite = result.website;
-
-          // Check if scrape completed (timestamp changed or status changed from pending)
-          if (updatedWebsite.lastScrapedAt !== previousScrapedAt) {
-            clearInterval(pollInterval);
-            setWebsites(prev => prev.map(w => w.id === websiteId ? updatedWebsite : w));
-            setScrapingWebsiteId(null);
-            if (updatedWebsite.lastScrapeStatus === 'success') {
-              setSuccess("Scrape completed successfully!");
-            } else {
-              setError("Scrape failed. Check the server logs for details.");
-            }
-            setTimeout(() => { setSuccess(""); setError(""); }, 3000);
-          }
-        } catch {
-          // Ignore polling errors, will retry
-        }
-      }, 2000);
-
-      // Stop polling after 60 seconds
-      setTimeout(() => {
-        clearInterval(pollInterval);
-        if (scrapingWebsiteId === websiteId) {
-          setScrapingWebsiteId(null);
-          setError("Scrape timed out. Check server logs.");
-          setTimeout(() => setError(""), 3000);
-        }
-      }, 60000);
-
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to start scrape");
-      setScrapingWebsiteId(null);
-    }
-  }
+  const activeServerCount = serverConfigs.filter(c => c.botActive).length;
 
   if (loading || !isAuthLoaded || !isUserLoaded) {
     return (
@@ -440,8 +178,8 @@ export default function DashboardPage() {
         </h2>
 
         {discordConnected ? (
-          <div>
-            <div className="flex items-center gap-2 text-green-400 mb-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-green-400">
               <span className="w-3 h-3 bg-green-400 rounded-full"></span>
               Connected
             </div>
@@ -449,7 +187,7 @@ export default function DashboardPage() {
               onClick={handleDisconnect}
               className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition"
             >
-              Disconnect Discord
+              Disconnect
             </button>
           </div>
         ) : (
@@ -472,364 +210,158 @@ export default function DashboardPage() {
         )}
       </section>
 
-      {/* Server Selection */}
-      {discordConnected && (
-        <section className="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-6">
-          <h2 className="text-xl font-semibold text-white mb-4">
-            Monitored Server
-          </h2>
-
-          {selectingServer ? (
-            <div>
-              {loadingGuilds ? (
-                <p className="text-gray-400">Loading servers...</p>
-              ) : (
-                <div className="space-y-3">
-                  <p className="text-gray-400 mb-4">
-                    Select a server to monitor. The bot will respond in all channels.
-                  </p>
-
-                  <div className="space-y-2 max-h-64 overflow-y-auto">
-                    {guilds.map((guild) => (
-                      <button
-                        key={guild.id}
-                        onClick={() => handleSelectServer(guild)}
-                        disabled={savingServer}
-                        className={`w-full px-4 py-3 text-left flex items-center justify-between border rounded-lg transition ${
-                          selectedGuild?.id === guild.id
-                            ? "border-indigo-600 bg-indigo-900/30"
-                            : "border-gray-700 hover:bg-gray-800"
-                        } disabled:opacity-50`}
-                      >
-                        <span className="text-white">{guild.name}</span>
-                        {selectedGuild?.id === guild.id && (
-                          <span className="text-xs bg-indigo-600 text-white px-2 py-0.5 rounded-full">
-                            Current
-                          </span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="flex gap-3 mt-4">
-                    <button
-                      onClick={cancelSelection}
-                      disabled={savingServer}
-                      className="px-4 py-2 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div>
-              {selectedGuild ? (
-                <div>
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className="w-10 h-10 bg-indigo-600 rounded-full flex items-center justify-center text-white font-bold">
-                      {selectedGuild.name.charAt(0).toUpperCase()}
-                    </div>
-                    <div>
-                      <p className="text-white font-medium">{selectedGuild.name}</p>
-                      <p className="text-gray-400 text-sm">Monitoring all channels</p>
-                    </div>
-                  </div>
-                  <div className="flex gap-3">
-                    <button
-                      onClick={startSelectingServer}
-                      className="px-4 py-2 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition"
-                    >
-                      Change Server
-                    </button>
-                    <button
-                      onClick={handleRemoveServer}
-                      className="px-4 py-2 bg-red-600/20 text-red-400 rounded-lg hover:bg-red-600/30 transition"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div>
-                  <p className="text-gray-400 mb-4">
-                    No server selected. Select a server to start monitoring.
-                  </p>
-                  <button
-                    onClick={startSelectingServer}
-                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition"
-                  >
-                    Select Server
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-        </section>
-      )}
-
-      {/* Discord Bot Activation */}
-      {discordConnected && selectedGuild && (
-        <section className="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-6">
-          <h2 className="text-xl font-semibold text-white mb-4">
-            Discord Bot
-          </h2>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-white font-medium">
-                {discordBotActive ? "Bot is active" : "Bot is inactive"}
-              </p>
-              <p className="text-gray-400 text-sm">
-                {discordBotActive
-                  ? `Responding to messages in ${selectedGuild.name}`
-                  : "Enable to start responding to Discord messages"}
-              </p>
-            </div>
-            <button
-              onClick={handleToggleBot}
-              disabled={togglingBot}
-              className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors ${
-                discordBotActive ? "bg-green-600" : "bg-gray-600"
-              } ${togglingBot ? "opacity-50" : ""}`}
-            >
-              <span
-                className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform ${
-                  discordBotActive ? "translate-x-7" : "translate-x-1"
-                }`}
-              />
-            </button>
-          </div>
-          {discordBotActive && (
-            <div className="mt-4 p-3 bg-green-900/20 border border-green-800 rounded-lg">
-              <p className="text-green-400 text-sm">
-                The bot is now active and will respond to messages in all channels of {selectedGuild.name}.
-              </p>
-            </div>
-          )}
-        </section>
-      )}
-
-      {/* Agent Stats */}
+      {/* Overview Stats */}
       {discordConnected && stats && (
         <section className="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-6">
-          <h2 className="text-xl font-semibold text-white mb-4">
-            Agent Statistics
-          </h2>
+          <h2 className="text-xl font-semibold text-white mb-4">Overview</h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="bg-gray-800 rounded-lg p-4">
-              <div className="text-gray-400 text-sm mb-1">Messages Received</div>
-              <div className="text-2xl font-bold text-white">{stats.messagesReceivedCount}</div>
+              <div className="text-gray-400 text-sm mb-1">Servers</div>
+              <div className="text-2xl font-bold text-white">{serverConfigs.length}</div>
               <div className="text-gray-500 text-xs mt-1">
-                Last: {formatTimeAgo(stats.lastMessageReceivedAt)}
+                {activeServerCount} active
               </div>
+            </div>
+            <div className="bg-gray-800 rounded-lg p-4">
+              <div className="text-gray-400 text-sm mb-1">Messages Received</div>
+              <div className="text-2xl font-bold text-white">{stats.totalMessagesReceived}</div>
+              <div className="text-gray-500 text-xs mt-1">Across all servers</div>
             </div>
             <div className="bg-gray-800 rounded-lg p-4">
               <div className="text-gray-400 text-sm mb-1">Messages Sent</div>
-              <div className="text-2xl font-bold text-white">{stats.messagesSentCount}</div>
-              <div className="text-gray-500 text-xs mt-1">
-                Last: {formatTimeAgo(stats.lastMessageSentAt)}
-              </div>
+              <div className="text-2xl font-bold text-white">{stats.totalMessagesSent}</div>
+              <div className="text-gray-500 text-xs mt-1">Across all servers</div>
             </div>
             <div className="bg-gray-800 rounded-lg p-4">
               <div className="text-gray-400 text-sm mb-1">Response Rate</div>
               <div className="text-2xl font-bold text-white">
-                {stats.messagesReceivedCount > 0
-                  ? Math.round((stats.messagesSentCount / stats.messagesReceivedCount) * 100)
+                {stats.totalMessagesReceived > 0
+                  ? Math.round((stats.totalMessagesSent / stats.totalMessagesReceived) * 100)
                   : 0}%
               </div>
               <div className="text-gray-500 text-xs mt-1">Sent / Received</div>
             </div>
-            <div className="bg-gray-800 rounded-lg p-4">
-              <div className="text-gray-400 text-sm mb-1">Status</div>
-              <div className="flex items-center gap-2 mt-1">
-                {selectedGuild ? (
-                  <>
-                    <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
-                    <span className="text-green-400 font-medium">Active</span>
-                  </>
-                ) : (
-                  <>
-                    <span className="w-2 h-2 bg-yellow-400 rounded-full"></span>
-                    <span className="text-yellow-400 font-medium">No Server</span>
-                  </>
-                )}
-              </div>
-              <div className="text-gray-500 text-xs mt-1">
-                {selectedGuild ? `In ${selectedGuild.name}` : "Select a server"}
-              </div>
-            </div>
           </div>
         </section>
       )}
 
-      {/* Important Websites */}
-      {discordConnected && selectedGuild && (
+      {/* Server List */}
+      {discordConnected && (
         <section className="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-6">
-          <h2 className="text-xl font-semibold text-white mb-2">
-            Important Websites
-          </h2>
-          <p className="text-gray-400 text-sm mb-4">
-            These websites are scraped daily and provided to HUMA as context for understanding your server.
-          </p>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-semibold text-white">Servers</h2>
+            {!addingServer && (
+              <button
+                onClick={startAddingServer}
+                className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition text-sm"
+              >
+                Add Server
+              </button>
+            )}
+          </div>
 
-          {loadingWebsites ? (
-            <p className="text-gray-400">Loading websites...</p>
-          ) : (
-            <>
-              {/* Website list */}
-              {websites.length > 0 && (
-                <div className="space-y-3 mb-4">
-                  {websites.map((website) => (
-                    <div
-                      key={website.id}
-                      className="bg-gray-800 rounded-lg p-4 flex items-start justify-between"
+          {/* Add Server Flow */}
+          {addingServer && (
+            <div className="mb-6 p-4 bg-gray-800 rounded-lg border border-gray-700">
+              <h3 className="text-white font-medium mb-3">Select a server to add</h3>
+              {loadingGuilds ? (
+                <p className="text-gray-400">Loading servers...</p>
+              ) : guilds.length === 0 ? (
+                <p className="text-gray-400">No more servers available to add.</p>
+              ) : (
+                <div className="space-y-2 max-h-64 overflow-y-auto mb-4">
+                  {guilds.map((guild) => (
+                    <button
+                      key={guild.id}
+                      onClick={() => handleAddServer(guild)}
+                      disabled={savingServer}
+                      className="w-full px-4 py-3 text-left flex items-center justify-between border border-gray-700 rounded-lg hover:bg-gray-700 transition disabled:opacity-50"
                     >
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-white font-medium truncate">
-                            {website.name || (() => {
-                              try {
-                                return new URL(website.url).hostname;
-                              } catch {
-                                return website.url;
-                              }
-                            })()}
-                          </span>
-                          {website.lastScrapeStatus === "success" && (
-                            <span className="w-2 h-2 bg-green-400 rounded-full flex-shrink-0" />
-                          )}
-                          {website.lastScrapeStatus === "error" && (
-                            <span className="w-2 h-2 bg-red-400 rounded-full flex-shrink-0" />
-                          )}
-                          {website.lastScrapeStatus === "pending" && (
-                            <span className="w-2 h-2 bg-yellow-400 rounded-full animate-pulse flex-shrink-0" />
-                          )}
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 bg-indigo-600 rounded-full flex items-center justify-center text-white font-bold text-sm">
+                          {guild.name.charAt(0).toUpperCase()}
                         </div>
-                        <p className="text-gray-400 text-sm truncate">{website.url}</p>
-                        <p className="text-gray-500 text-xs mt-1">
-                          Last scraped: {formatTimeAgo(website.lastScrapedAt)}
-                          {website.contentSize > 0 &&
-                            ` · ${(website.contentSize / 1024).toFixed(1)} KB`}
-                        </p>
+                        <span className="text-white">{guild.name}</span>
                       </div>
-                      <div className="flex gap-2 ml-4 flex-shrink-0">
-                        <button
-                          onClick={() => handleRescrape(website.id)}
-                          disabled={scrapingWebsiteId === website.id}
-                          className="px-3 py-1 text-sm bg-gray-700 text-white rounded hover:bg-gray-600 transition disabled:opacity-50"
-                        >
-                          {scrapingWebsiteId === website.id ? "Scraping..." : "Rescrape"}
-                        </button>
-                        <button
-                          onClick={() => handleRemoveWebsite(website.id)}
-                          className="px-3 py-1 text-sm bg-red-600/20 text-red-400 rounded hover:bg-red-600/30 transition"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    </div>
+                    </button>
                   ))}
                 </div>
               )}
+              <button
+                onClick={cancelAddServer}
+                disabled={savingServer}
+                className="px-4 py-2 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
 
-              {/* Add website form */}
-              <div className="bg-gray-800 rounded-lg p-4">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <input
-                    type="url"
-                    value={newWebsiteUrl}
-                    onChange={(e) => setNewWebsiteUrl(e.target.value)}
-                    placeholder="https://example.com"
-                    className="px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500 md:col-span-2"
-                  />
-                  <input
-                    type="text"
-                    value={newWebsiteName}
-                    onChange={(e) => setNewWebsiteName(e.target.value)}
-                    placeholder="Name (optional)"
-                    className="px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500"
-                  />
-                </div>
+          {/* Server Cards */}
+          {serverConfigs.length === 0 ? (
+            <div className="text-center py-8">
+              <p className="text-gray-400 mb-4">No servers configured yet.</p>
+              {!addingServer && (
                 <button
-                  onClick={handleAddWebsite}
-                  disabled={addingWebsite || !newWebsiteUrl.trim()}
-                  className="mt-3 px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 transition disabled:opacity-50"
+                  onClick={startAddingServer}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition"
                 >
-                  {addingWebsite ? "Adding..." : "Add Website"}
+                  Add Your First Server
                 </button>
-              </div>
-            </>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {serverConfigs.map((config) => (
+                <Link
+                  key={config.id}
+                  href={`/dashboard/servers/${config.id}`}
+                  className="block p-4 bg-gray-800 rounded-lg border border-gray-700 hover:border-gray-600 transition"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-indigo-600 rounded-full flex items-center justify-center text-white font-bold">
+                        {config.guildName.charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <h3 className="text-white font-medium">{config.guildName}</h3>
+                        <p className="text-gray-400 text-sm">
+                          {config.botActive ? (
+                            <span className="text-green-400">Active</span>
+                          ) : (
+                            <span className="text-gray-500">Inactive</span>
+                          )}
+                          {config.websiteCount > 0 && ` · ${config.websiteCount} website${config.websiteCount !== 1 ? 's' : ''}`}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-gray-400 text-sm">
+                        {config.messagesSentCount} sent / {config.messagesReceivedCount} received
+                      </div>
+                      <div className="text-gray-500 text-xs">
+                        Last activity: {formatTimeAgo(config.lastMessageSentAt || config.lastMessageReceivedAt)}
+                      </div>
+                    </div>
+                  </div>
+                </Link>
+              ))}
+            </div>
           )}
         </section>
       )}
 
-      {/* Agent Configuration */}
-      {discordConnected && (
+      {/* Quick Links */}
+      {discordConnected && serverConfigs.length > 0 && (
         <section className="bg-gray-900 rounded-xl p-6 border border-gray-800">
-          <h2 className="text-xl font-semibold text-white mb-4">
-            Agent Configuration
-          </h2>
-
-          {/* Personality */}
-          <div className="mb-6">
-            <label className="block text-white font-medium mb-2">
-              Personality
-            </label>
-            <p className="text-gray-400 text-sm mb-2">
-              Define the character traits and communication style of your AI agent.
-            </p>
-            <textarea
-              value={config.personality}
-              onChange={(e) => setConfig({ ...config, personality: e.target.value })}
-              placeholder="e.g., Friendly, witty, and knowledgeable. Uses casual language and occasional humor..."
-              className="w-full h-24 px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500 resize-none"
-            />
-          </div>
-
-          {/* Rules */}
-          <div className="mb-6">
-            <label className="block text-white font-medium mb-2">
-              Rules
-            </label>
-            <p className="text-gray-400 text-sm mb-2">
-              Set behavioral guidelines and restrictions for your AI agent.
-            </p>
-            <textarea
-              value={config.rules}
-              onChange={(e) => setConfig({ ...config, rules: e.target.value })}
-              placeholder="e.g., Never discuss politics. Always be respectful. Only respond in English..."
-              className="w-full h-24 px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500 resize-none"
-            />
-          </div>
-
-          {/* Information */}
-          <div className="mb-6">
-            <label className="block text-white font-medium mb-2">
-              Information
-            </label>
-            <p className="text-gray-400 text-sm mb-2">
-              Provide context and knowledge for your AI agent to reference during conversations.
-            </p>
-            <textarea
-              value={config.information}
-              onChange={(e) => setConfig({ ...config, information: e.target.value })}
-              placeholder="e.g., Our Discord server is for game developers. The main game we discuss is Project X..."
-              className="w-full h-24 px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500 resize-none"
-            />
-          </div>
-
-          <div className="flex items-center gap-4">
-            <button
-              onClick={handleSaveConfig}
-              disabled={savingConfig || !hasConfigChanges}
-              className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition disabled:opacity-50"
+          <h2 className="text-xl font-semibold text-white mb-4">Quick Links</h2>
+          <div className="flex flex-wrap gap-3">
+            <Link
+              href="/chat"
+              className="px-4 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-700 transition"
             >
-              {savingConfig ? "Saving..." : "Save Configuration"}
-            </button>
-            {hasConfigChanges && (
-              <span className="text-gray-500 text-sm">Unsaved changes</span>
-            )}
+              Open Chat
+            </Link>
           </div>
         </section>
       )}

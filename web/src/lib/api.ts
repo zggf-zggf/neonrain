@@ -84,6 +84,62 @@ export async function saveAgentConfig(token: string, config: Partial<AgentConfig
   });
 }
 
+// Server configuration (multi-server support)
+export interface ServerConfig {
+  id: string;
+  serverId: string;
+  guildId: string;
+  guildName: string;
+  botName: string;
+  botActive: boolean;
+  personality: string;
+  rules: string;
+  information: string;
+  messagesSentCount: number;
+  messagesReceivedCount: number;
+  lastMessageSentAt: string | null;
+  lastMessageReceivedAt: string | null;
+  websiteCount: number;
+}
+
+export async function getServerConfigs(token: string): Promise<{ success: boolean; servers: ServerConfig[] }> {
+  return fetchWithAuth('/api/server-configs', token);
+}
+
+export async function addServerConfig(token: string, guildId: string, guildName: string): Promise<{ success: boolean; server: ServerConfig }> {
+  return fetchWithAuth('/api/server-configs', token, {
+    method: 'POST',
+    body: JSON.stringify({ guildId, guildName }),
+  });
+}
+
+export async function getServerConfig(token: string, configId: string): Promise<{ success: boolean; server: ServerConfig }> {
+  return fetchWithAuth(`/api/server-configs/${configId}`, token);
+}
+
+export async function updateServerConfig(
+  token: string,
+  configId: string,
+  config: Partial<{
+    botName: string;
+    personality: string;
+    rules: string;
+    information: string;
+    botActive: boolean;
+  }>
+): Promise<{ success: boolean; server: ServerConfig }> {
+  return fetchWithAuth(`/api/server-configs/${configId}`, token, {
+    method: 'PUT',
+    body: JSON.stringify(config),
+  });
+}
+
+export async function deleteServerConfig(token: string, configId: string): Promise<{ success: boolean }> {
+  return fetchWithAuth(`/api/server-configs/${configId}`, token, {
+    method: 'DELETE',
+  });
+}
+
 // Website management
 export interface Website {
   id: string;

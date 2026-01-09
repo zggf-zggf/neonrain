@@ -29,8 +29,8 @@ func NewClient(baseURL, apiKey string) *Client {
 	}
 }
 
-// FetchDiscordTokens retrieves Discord tokens and configurations from the backend
-func (c *Client) FetchDiscordTokens() ([]types.UserConfig, error) {
+// FetchTokenConfigs retrieves token configurations with multiple servers per token
+func (c *Client) FetchTokenConfigs() ([]types.TokenConfig, error) {
 	req, err := http.NewRequest("GET", c.baseURL+"/api/discord/tokens", nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -63,30 +63,20 @@ func (c *Client) FetchDiscordTokens() ([]types.UserConfig, error) {
 		return nil, fmt.Errorf("backend returned success=false")
 	}
 
-	var configs []types.UserConfig
+	// Filter out tokens without valid Discord tokens
+	var configs []types.TokenConfig
 	for _, t := range tokenResp.Tokens {
 		if t.DiscordToken != "" {
-			configs = append(configs, types.UserConfig{
-				UserID:            t.UserID,
-				Token:             t.DiscordToken,
-				Email:             t.UserEmail,
-				BotActive:         t.DiscordBotActive,
-				SelectedGuildID:   t.SelectedGuildID,
-				SelectedGuildName: t.SelectedGuildName,
-				Personality:       t.Personality,
-				Rules:             t.Rules,
-				Information:       t.Information,
-				Websites:          t.Websites,
-			})
+			configs = append(configs, t)
 		}
 	}
 
 	return configs, nil
 }
 
-// ReportStats sends a stats event to the backend
-func (c *Client) ReportStats(userID, event string) error {
-	payload := fmt.Sprintf(`{"userId":"%s","event":"%s"}`, userID, event)
+// ReportStats sends a stats event to the backend for a specific guild
+func (c *Client) ReportStats(userID, guildID, event string) error {
+	payload := fmt.Sprintf(`{"userId":"%s","guildId":"%s","event":"%s"}`, userID, guildID, event)
 
 	req, err := http.NewRequest("POST", c.baseURL+"/api/discord/stats", nil)
 	if err != nil {

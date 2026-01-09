@@ -8,7 +8,33 @@ type WebsiteData struct {
 	ScrapedAt string `json:"scrapedAt"`
 }
 
-// UserConfig represents a user's Discord configuration
+// ServerConfig represents per-server bot configuration
+type ServerConfig struct {
+	GuildID     string        `json:"guildId"`
+	GuildName   string        `json:"guildName"`
+	BotActive   bool          `json:"botActive"`
+	BotName     string        `json:"botName"`
+	Personality string        `json:"personality"`
+	Rules       string        `json:"rules"`
+	Information string        `json:"information"`
+	Websites    []WebsiteData `json:"websites"`
+}
+
+// TokenConfig represents a user's token with all their server configs
+type TokenConfig struct {
+	DiscordToken string         `json:"discordToken"`
+	UserID       string         `json:"userId"`
+	Servers      []ServerConfig `json:"servers"`
+}
+
+// TokenResponse represents the response from the backend API (new multi-server format)
+type TokenResponse struct {
+	Success bool          `json:"success"`
+	Tokens  []TokenConfig `json:"tokens"`
+}
+
+// UserConfig represents a user's Discord configuration (for internal use)
+// Deprecated: Use TokenConfig + ServerConfig instead
 type UserConfig struct {
 	UserID            string
 	Token             string
@@ -20,23 +46,6 @@ type UserConfig struct {
 	Rules             string
 	Information       string
 	Websites          []WebsiteData
-}
-
-// TokenResponse represents the response from the backend API
-type TokenResponse struct {
-	Success bool `json:"success"`
-	Tokens  []struct {
-		UserID            string        `json:"userId"`
-		UserEmail         string        `json:"userEmail"`
-		DiscordToken      string        `json:"discordToken"`
-		DiscordBotActive  bool          `json:"discordBotActive"`
-		SelectedGuildID   string        `json:"selectedGuildId"`
-		SelectedGuildName string        `json:"selectedGuildName"`
-		Personality       string        `json:"personality"`
-		Rules             string        `json:"rules"`
-		Information       string        `json:"information"`
-		Websites          []WebsiteData `json:"websites"`
-	} `json:"tokens"`
 }
 
 // GuildInfo represents a Discord guild

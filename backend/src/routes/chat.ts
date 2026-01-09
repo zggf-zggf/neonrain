@@ -204,8 +204,12 @@ router.post('/groups', requireAuth(), async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'paneCount must be 1, 3, or 5' });
     }
 
-    // Check if user has required configuration
-    if (!user.selectedGuildId) {
+    // Check if user has at least one server configured
+    const serverConfigCount = await prisma.userServerConfig.count({
+      where: { userId: user.id }
+    });
+
+    if (serverConfigCount === 0) {
       return res.status(400).json({
         error: 'No server configured',
         code: 'NO_SERVER_CONFIGURED',
@@ -456,8 +460,12 @@ router.post('/conversations', requireAuth(), async (req: Request, res: Response)
 
     const user = await getOrCreateUser(auth.userId);
 
-    // Check if user has required configuration
-    if (!user.selectedGuildId) {
+    // Check if user has at least one server configured
+    const serverConfigCount = await prisma.userServerConfig.count({
+      where: { userId: user.id }
+    });
+
+    if (serverConfigCount === 0) {
       return res.status(400).json({
         error: 'No server configured',
         code: 'NO_SERVER_CONFIGURED',
@@ -690,8 +698,12 @@ router.get('/conversation', requireAuth(), async (req: Request, res: Response) =
 
     const user = await getOrCreateUser(auth.userId);
 
-    // Check if user has required configuration
-    if (!user.selectedGuildId) {
+    // Check if user has at least one server configured
+    const serverConfigCount = await prisma.userServerConfig.count({
+      where: { userId: user.id }
+    });
+
+    if (serverConfigCount === 0) {
       return res.status(400).json({
         error: 'No server configured',
         code: 'NO_SERVER_CONFIGURED',

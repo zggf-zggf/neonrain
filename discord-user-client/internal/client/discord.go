@@ -16,7 +16,7 @@ import (
 
 // ConfigProvider provides config for a specific guild
 type ConfigProvider interface {
-	GetConfigForGuild(guildID string) (types.UserConfig, bool)
+	GetConfigForGuild(guildID string) (GuildConfigWithUser, bool)
 }
 
 // DiscordClient manages Discord connection and message processing
@@ -127,6 +127,75 @@ func (dc *DiscordClient) Connect(config types.UserConfig) error {
 				}
 
 				// Check if message is from the selected guild
+				if dc.isFromSelectedGuild(evt.GuildID) {
+					dc.processMessageWithHUMA(evt)
+				}
+			}
+		}()
+	}
+
+	// Load main page (required for user tokens)
+	if session.IsUser {
+		log.Println("Loading Discord...")
+		err = session.LoadMainPage(context.Background())
+		if err != nil {
+			log.Printf("Warning: Failed to load main page: %v", err)
+		}
+	}
+
+	// Connect
+	log.Println("Connecting to Discord...")
+	err = session.Open()
+	if err != nil {
+		return fmt.Errorf("error connecting to Discord: %w", err)
+	}
+
+	dc.session = session
+	return nil
+}
+
+// ConnectWithToken establishes a connection using just a Discord token
+// Used for multi-guild mode where config is fetched per-guild
+func (dc *DiscordClient) ConnectWithToken(token string) error {
+	dc.token = token
+	dc.readyHandled = false
+
+	// Create Discord session
+	session, err := discordgo.New(token)
+	if err != nil {
+		return fmt.Errorf("error creating Discord session: %w", err)
+	}
+
+	// Enable state tracking
+	session.StateEnabled = true
+
+	// Set EventHandler
+	session.EventHandler = func(rawEvt any) {
+		go func() {
+			switch evt := rawEvt.(type) {
+			case *discordgo.Ready:
+				if !dc.readyHandled {
+					dc.readyHandled = true
+					dc.botUsername = evt.User.Username
+
+					// Configure HUMA manager with Discord client as sender
+					if dc.humaManager != nil {
+						dc.humaManager.SetMessageSender(dc)
+						dc.humaManager.SetHistoryManager(dc.historyManager)
+					}
+
+					log.Printf("✓ Connected as: %s", evt.User.Username)
+					log.Printf("✓ Bot username: %s", dc.botUsername)
+					log.Printf("✓ HUMA integration enabled (multi-guild mode)")
+					log.Println("✓ Listening for messages...")
+				}
+			case *discordgo.MessageCreate:
+				// Ignore our own messages
+				if evt.Author.ID == session.State.User.ID {
+					return
+				}
+
+				// Check if message is from a monitored guild
 				if dc.isFromSelectedGuild(evt.GuildID) {
 					dc.processMessageWithHUMA(evt)
 				}
@@ -269,7 +338,7 @@ func (dc *DiscordClient) processMessageWithHUMA(msg *discordgo.MessageCreate) {
 			// Bot is not active for this guild, skip
 			return
 		}
-		guildName = config.SelectedGuildName
+		guildName = config.GuildName
 		personality = config.Personality
 		rules = config.Rules
 		information = config.Information
@@ -308,9 +377,9 @@ func (dc *DiscordClient) processMessageWithHUMA(msg *discordgo.MessageCreate) {
 	log.Printf("[HUMA] Message from #%s in %s - %s: %s", channelName, guildName, msg.Author.Username, msg.Content)
 
 	// Report message received to backend
-	if dc.backendClient != nil && userID != "" {
+	if dc.backendClient != nil && userID != "" && guildID != "" {
 		go func() {
-			if err := dc.backendClient.ReportStats(userID, "message_received"); err != nil {
+			if err := dc.backendClient.ReportStats(userID, guildID, "message_received"); err != nil {
 				log.Printf("[Stats] Failed to report message_received: %v", err)
 			}
 		}()
@@ -407,21 +476,23 @@ func (dc *DiscordClient) SendMessage(channelID, content string) error {
 	// Report message sent to backend - find the correct user for this channel's guild
 	if dc.backendClient != nil {
 		go func() {
-			// Determine which user to report stats for
+			// Determine which user and guild to report stats for
 			userID := dc.userID // fallback to default
+			guildID := ""
 
 			// In multi-guild mode, look up the user from the channel's guild
 			if dc.configProvider != nil {
 				channel, err := dc.session.Channel(channelID)
 				if err == nil && channel != nil {
+					guildID = channel.GuildID
 					if config, exists := dc.configProvider.GetConfigForGuild(channel.GuildID); exists {
 						userID = config.UserID
 					}
 				}
 			}
 
-			if userID != "" {
-				if err := dc.backendClient.ReportStats(userID, "message_sent"); err != nil {
+			if userID != "" && guildID != "" {
+				if err := dc.backendClient.ReportStats(userID, guildID, "message_sent"); err != nil {
 					log.Printf("[Stats] Failed to report message_sent: %v", err)
 				}
 			}

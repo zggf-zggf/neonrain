@@ -68,18 +68,18 @@ func main() {
 
 	// Initial fetch
 	go func() {
-		configs, err := backendClient.FetchDiscordTokens()
+		tokenConfigs, err := backendClient.FetchTokenConfigs()
 		if err != nil {
 			log.Printf("Error fetching tokens: %v", err)
 			log.Println("Waiting for Discord accounts to be connected...")
-		} else if len(configs) > 0 {
-			// Count unique tokens
-			uniqueTokens := make(map[string]bool)
-			for _, c := range configs {
-				uniqueTokens[c.Token] = true
+		} else if len(tokenConfigs) > 0 {
+			// Count total servers across all tokens
+			totalServers := 0
+			for _, tc := range tokenConfigs {
+				totalServers += len(tc.Servers)
 			}
-			log.Printf("Found %d user config(s) with %d unique Discord token(s)", len(configs), len(uniqueTokens))
-			clientManager.SyncConfigs(configs)
+			log.Printf("Found %d token(s) with %d total server config(s)", len(tokenConfigs), totalServers)
+			clientManager.SyncTokenConfigs(tokenConfigs)
 		} else {
 			log.Println("No Discord tokens found, waiting for users to connect Discord accounts...")
 		}
@@ -89,7 +89,7 @@ func main() {
 	for {
 		select {
 		case <-ticker.C:
-			configs, err := backendClient.FetchDiscordTokens()
+			tokenConfigs, err := backendClient.FetchTokenConfigs()
 			if err != nil {
 				log.Printf("Error fetching tokens: %v", err)
 				continue
@@ -100,7 +100,7 @@ func main() {
 			// - New tokens (creates new connections)
 			// - Removed tokens (disconnects)
 			// - Updated configs (updates guild monitoring)
-			clientManager.SyncConfigs(configs)
+			clientManager.SyncTokenConfigs(tokenConfigs)
 
 		case <-sigChan:
 			log.Println("\nShutting down...")

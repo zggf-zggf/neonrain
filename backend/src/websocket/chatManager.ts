@@ -67,9 +67,22 @@ export class ChatManager {
     );
 
     try {
-      // Get user and their configuration
+      // Get user
       const user = await prisma.user.findUnique({
         where: { clerkUserId },
+      });
+
+      if (!user) {
+        socket.emit('chat:error', { message: 'User not found' });
+        socket.disconnect();
+        return;
+      }
+
+      // Get first server config (for now, chat uses the first configured server)
+      // TODO: Support selecting specific server for chat
+      const serverConfig = await prisma.userServerConfig.findFirst({
+        where: { userId: user.id },
+        orderBy: { updatedAt: 'desc' },
         include: {
           server: {
             include: {
@@ -86,13 +99,7 @@ export class ChatManager {
         },
       });
 
-      if (!user) {
-        socket.emit('chat:error', { message: 'User not found' });
-        socket.disconnect();
-        return;
-      }
-
-      if (!user.selectedGuildId) {
+      if (!serverConfig) {
         socket.emit('chat:error', {
           message: 'No server configured. Please configure a server first.',
           code: 'NO_SERVER',
@@ -149,25 +156,24 @@ export class ChatManager {
         }
       }
 
-      // Build websites data
-      const websites =
-        user.server?.websites.map((w) => ({
-          url: w.url,
-          name: w.name || '',
-          markdown: w.scrapes[0]?.markdownContent || '',
-          scrapedAt: w.scrapes[0]?.scrapedAt?.toISOString() || '',
-        })) || [];
+      // Build websites data from server config
+      const websites = serverConfig.server.websites.map((w) => ({
+        url: w.url,
+        name: w.name || '',
+        markdown: w.scrapes[0]?.markdownContent || '',
+        scrapedAt: w.scrapes[0]?.scrapedAt?.toISOString() || '',
+      }));
 
       // Create chat agent with conversation-specific ID
       const agent = new ChatAgent(
         this.humaApiKey,
         conversation.id, // Use conversation ID for agent (not user ID)
         user.email || 'User',
-        user.botName || 'Assistant', // Bot name from user config
+        serverConfig.botName || 'Assistant', // Bot name from server config
         {
-          personality: user.personality || '',
-          rules: user.rules || '',
-          information: user.information || '',
+          personality: serverConfig.personality || '',
+          rules: serverConfig.rules || '',
+          information: serverConfig.information || '',
         },
         websites
       );

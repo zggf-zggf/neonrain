@@ -149,13 +149,13 @@ router.post('/claim-token', requireAuth(), async (req: Request, res: Response) =
     // Get or create user in our database
     const user = await getOrCreateUser(auth.userId);
 
-    // Transaction: update user with Discord token, bot name, and mark pending as claimed
+    // Transaction: update user with Discord token and mark pending as claimed
+    // Note: botName is now stored per-server in UserServerConfig, not on User
     await prisma.$transaction([
       prisma.user.update({
         where: { id: user.id },
         data: {
           discordToken: pending.discordToken,
-          botName: botName,
         }
       }),
       prisma.pendingDiscordToken.update({
@@ -180,7 +180,7 @@ router.post('/claim-token', requireAuth(), async (req: Request, res: Response) =
   }
 });
 
-// Get Discord connection status and stats
+// Get Discord connection status and aggregated stats across all servers
 router.get('/status', requireAuth(), async (req: Request, res: Response) => {
   try {
     const auth = getAuth(req);
@@ -188,39 +188,44 @@ router.get('/status', requireAuth(), async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    let user = await getOrCreateUser(auth.userId);
+    const user = await getOrCreateUser(auth.userId);
 
-    // If user has a Discord token but no botName, fetch it now
-    if (user.discordToken && (!user.botName || user.botName === 'Assistant')) {
-      const discordUser = await fetchDiscordUserInfo(user.discordToken);
-      if (discordUser?.username) {
-        user = await prisma.user.update({
-          where: { id: user.id },
-          data: { botName: discordUser.username },
-        });
-        console.log(`[Status] Updated bot name for user ${user.id}: ${discordUser.username}`);
-      }
-    }
+    // Get all server configurations for this user
+    const serverConfigs = await prisma.userServerConfig.findMany({
+      where: { userId: user.id },
+      include: { server: true },
+      orderBy: { updatedAt: 'desc' }
+    });
+
+    // Aggregate stats across all servers
+    const totalSent = serverConfigs.reduce((sum, c) => sum + c.messagesSentCount, 0);
+    const totalReceived = serverConfigs.reduce((sum, c) => sum + c.messagesReceivedCount, 0);
+    const activeCount = serverConfigs.filter(c => c.botActive).length;
 
     res.json({
       success: true,
       connected: !!user.discordToken,
-      botActive: user.discordBotActive,
-      botName: user.botName || 'Assistant',
+      serverCount: serverConfigs.length,
+      activeServerCount: activeCount,
       user: {
         id: user.id,
         email: user.email
       },
-      selectedGuild: user.selectedGuildId ? {
-        id: user.selectedGuildId,
-        name: user.selectedGuildName
-      } : null,
       stats: {
-        lastMessageSentAt: user.lastMessageSentAt,
-        lastMessageReceivedAt: user.lastMessageReceivedAt,
-        messagesSentCount: user.messagesSentCount,
-        messagesReceivedCount: user.messagesReceivedCount
-      }
+        totalMessagesSent: totalSent,
+        totalMessagesReceived: totalReceived
+      },
+      servers: serverConfigs.map(c => ({
+        id: c.id,
+        guildId: c.server.guildId,
+        guildName: c.server.guildName,
+        botActive: c.botActive,
+        botName: c.botName,
+        messagesSentCount: c.messagesSentCount,
+        messagesReceivedCount: c.messagesReceivedCount,
+        lastMessageSentAt: c.lastMessageSentAt,
+        lastMessageReceivedAt: c.lastMessageReceivedAt
+      }))
     });
   } catch (error) {
     console.error('Discord status error:', error);
@@ -255,9 +260,11 @@ router.post('/disconnect', requireAuth(), async (req: Request, res: Response) =>
   }
 });
 
-// Save selected guild (server) for user
+// [DEPRECATED] Save selected guild - use POST /api/server-configs instead
+// Creates a new server config for backward compatibility
 router.post('/guild', requireAuth(), async (req: Request, res: Response) => {
   try {
+    console.warn('[DEPRECATED] POST /api/discord/guild - Use POST /api/server-configs instead');
     const auth = getAuth(req);
     if (!auth.userId) {
       return res.status(401).json({ error: 'Unauthorized' });
@@ -281,22 +288,38 @@ router.post('/guild', requireAuth(), async (req: Request, res: Response) => {
       create: { guildId, guildName }
     });
 
-    // Update user with selected guild and server relation
-    const updatedUser = await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        selectedGuildId: guildId,
-        selectedGuildName: guildName,
-        serverId: server.id
+    // Get Discord username for default bot name
+    let botName = 'Assistant';
+    if (user.discordToken) {
+      const discordUser = await fetchDiscordUserInfo(user.discordToken);
+      if (discordUser?.username) {
+        botName = discordUser.username;
       }
+    }
+
+    // Upsert UserServerConfig (create if not exists, update name if exists)
+    const config = await prisma.userServerConfig.upsert({
+      where: {
+        userId_serverId: {
+          userId: user.id,
+          serverId: server.id
+        }
+      },
+      update: {},
+      create: {
+        userId: user.id,
+        serverId: server.id,
+        botName
+      },
+      include: { server: true }
     });
 
     res.json({
       success: true,
       message: 'Server saved successfully',
       guild: {
-        id: updatedUser.selectedGuildId,
-        name: updatedUser.selectedGuildName
+        id: config.server.guildId,
+        name: config.server.guildName
       }
     });
   } catch (error) {
@@ -305,9 +328,10 @@ router.post('/guild', requireAuth(), async (req: Request, res: Response) => {
   }
 });
 
-// Get selected guild for user
+// [DEPRECATED] Get first server config - use GET /api/server-configs instead
 router.get('/guild', requireAuth(), async (req: Request, res: Response) => {
   try {
+    console.warn('[DEPRECATED] GET /api/discord/guild - Use GET /api/server-configs instead');
     const auth = getAuth(req);
     if (!auth.userId) {
       return res.status(401).json({ error: 'Unauthorized' });
@@ -315,11 +339,18 @@ router.get('/guild', requireAuth(), async (req: Request, res: Response) => {
 
     const user = await getOrCreateUser(auth.userId);
 
+    // Get first server config
+    const config = await prisma.userServerConfig.findFirst({
+      where: { userId: user.id },
+      include: { server: true },
+      orderBy: { updatedAt: 'desc' }
+    });
+
     res.json({
       success: true,
-      guild: user.selectedGuildId ? {
-        id: user.selectedGuildId,
-        name: user.selectedGuildName
+      guild: config ? {
+        id: config.server.guildId,
+        name: config.server.guildName
       } : null
     });
   } catch (error) {
@@ -328,9 +359,10 @@ router.get('/guild', requireAuth(), async (req: Request, res: Response) => {
   }
 });
 
-// Remove selected guild
+// [DEPRECATED] Remove first server config - use DELETE /api/server-configs/:configId instead
 router.delete('/guild', requireAuth(), async (req: Request, res: Response) => {
   try {
+    console.warn('[DEPRECATED] DELETE /api/discord/guild - Use DELETE /api/server-configs/:configId instead');
     const auth = getAuth(req);
     if (!auth.userId) {
       return res.status(401).json({ error: 'Unauthorized' });
@@ -338,14 +370,17 @@ router.delete('/guild', requireAuth(), async (req: Request, res: Response) => {
 
     const user = await getOrCreateUser(auth.userId);
 
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        selectedGuildId: null,
-        selectedGuildName: null,
-        serverId: null
-      }
+    // Delete first server config
+    const config = await prisma.userServerConfig.findFirst({
+      where: { userId: user.id },
+      orderBy: { updatedAt: 'desc' }
     });
+
+    if (config) {
+      await prisma.userServerConfig.delete({
+        where: { id: config.id }
+      });
+    }
 
     res.json({
       success: true,
@@ -357,9 +392,10 @@ router.delete('/guild', requireAuth(), async (req: Request, res: Response) => {
   }
 });
 
-// Get Discord bot active status
+// [DEPRECATED] Get bot active status for first server - use GET /api/server-configs instead
 router.get('/bot-status', requireAuth(), async (req: Request, res: Response) => {
   try {
+    console.warn('[DEPRECATED] GET /api/discord/bot-status - Use GET /api/server-configs instead');
     const auth = getAuth(req);
     if (!auth.userId) {
       return res.status(401).json({ error: 'Unauthorized' });
@@ -367,9 +403,15 @@ router.get('/bot-status', requireAuth(), async (req: Request, res: Response) => 
 
     const user = await getOrCreateUser(auth.userId);
 
+    // Get first server config
+    const config = await prisma.userServerConfig.findFirst({
+      where: { userId: user.id },
+      orderBy: { updatedAt: 'desc' }
+    });
+
     res.json({
       success: true,
-      active: user.discordBotActive
+      active: config?.botActive || false
     });
   } catch (error) {
     console.error('Get bot status error:', error);
@@ -377,9 +419,10 @@ router.get('/bot-status', requireAuth(), async (req: Request, res: Response) => 
   }
 });
 
-// Set Discord bot active status
+// [DEPRECATED] Set bot active status for first server - use PUT /api/server-configs/:configId instead
 router.post('/bot-status', requireAuth(), async (req: Request, res: Response) => {
   try {
+    console.warn('[DEPRECATED] POST /api/discord/bot-status - Use PUT /api/server-configs/:configId instead');
     const auth = getAuth(req);
     if (!auth.userId) {
       return res.status(401).json({ error: 'Unauthorized' });
@@ -392,23 +435,35 @@ router.post('/bot-status', requireAuth(), async (req: Request, res: Response) =>
       return res.status(400).json({ error: 'active must be a boolean' });
     }
 
-    // Require Discord token and guild to activate
-    if (active && (!user.discordToken || !user.selectedGuildId)) {
+    // Get first server config
+    const config = await prisma.userServerConfig.findFirst({
+      where: { userId: user.id },
+      orderBy: { updatedAt: 'desc' }
+    });
+
+    if (!config) {
       return res.status(400).json({
-        error: 'Discord must be connected and a server must be selected to activate the bot'
+        error: 'A server must be configured before activating the bot'
       });
     }
 
-    const updatedUser = await prisma.user.update({
-      where: { id: user.id },
-      data: { discordBotActive: active }
+    // Require Discord token to activate
+    if (active && !user.discordToken) {
+      return res.status(400).json({
+        error: 'Discord must be connected to activate the bot'
+      });
+    }
+
+    const updatedConfig = await prisma.userServerConfig.update({
+      where: { id: config.id },
+      data: { botActive: active }
     });
 
-    console.log(`[Bot Status] User ${user.id} set discordBotActive to ${active}`);
+    console.log(`[Bot Status] User ${user.id} set botActive to ${active} for config ${config.id}`);
 
     res.json({
       success: true,
-      active: updatedUser.discordBotActive
+      active: updatedConfig.botActive
     });
   } catch (error) {
     console.error('Set bot status error:', error);
@@ -416,9 +471,10 @@ router.post('/bot-status', requireAuth(), async (req: Request, res: Response) =>
   }
 });
 
-// Save agent configuration (personality, rules, information)
+// [DEPRECATED] Save agent config for first server - use PUT /api/server-configs/:configId instead
 router.post('/config', requireAuth(), async (req: Request, res: Response) => {
   try {
+    console.warn('[DEPRECATED] POST /api/discord/config - Use PUT /api/server-configs/:configId instead');
     const auth = getAuth(req);
     if (!auth.userId) {
       return res.status(401).json({ error: 'Unauthorized' });
@@ -426,6 +482,18 @@ router.post('/config', requireAuth(), async (req: Request, res: Response) => {
 
     const user = await getOrCreateUser(auth.userId);
     const { personality, rules, information } = req.body;
+
+    // Get first server config
+    const config = await prisma.userServerConfig.findFirst({
+      where: { userId: user.id },
+      orderBy: { updatedAt: 'desc' }
+    });
+
+    if (!config) {
+      return res.status(400).json({
+        error: 'A server must be configured before saving configuration'
+      });
+    }
 
     // Build update data - only update fields that were provided
     const updateData: { personality?: string; rules?: string; information?: string } = {};
@@ -444,8 +512,8 @@ router.post('/config', requireAuth(), async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'At least one field (personality, rules, information) must be provided' });
     }
 
-    const updatedUser = await prisma.user.update({
-      where: { id: user.id },
+    const updatedConfig = await prisma.userServerConfig.update({
+      where: { id: config.id },
       data: updateData
     });
 
@@ -453,9 +521,9 @@ router.post('/config', requireAuth(), async (req: Request, res: Response) => {
       success: true,
       message: 'Configuration saved successfully',
       config: {
-        personality: updatedUser.personality || '',
-        rules: updatedUser.rules || '',
-        information: updatedUser.information || ''
+        personality: updatedConfig.personality || '',
+        rules: updatedConfig.rules || '',
+        information: updatedConfig.information || ''
       }
     });
   } catch (error) {
@@ -464,9 +532,10 @@ router.post('/config', requireAuth(), async (req: Request, res: Response) => {
   }
 });
 
-// Get agent configuration
+// [DEPRECATED] Get agent config for first server - use GET /api/server-configs/:configId instead
 router.get('/config', requireAuth(), async (req: Request, res: Response) => {
   try {
+    console.warn('[DEPRECATED] GET /api/discord/config - Use GET /api/server-configs/:configId instead');
     const auth = getAuth(req);
     if (!auth.userId) {
       return res.status(401).json({ error: 'Unauthorized' });
@@ -474,12 +543,18 @@ router.get('/config', requireAuth(), async (req: Request, res: Response) => {
 
     const user = await getOrCreateUser(auth.userId);
 
+    // Get first server config
+    const config = await prisma.userServerConfig.findFirst({
+      where: { userId: user.id },
+      orderBy: { updatedAt: 'desc' }
+    });
+
     res.json({
       success: true,
       config: {
-        personality: user.personality || '',
-        rules: user.rules || '',
-        information: user.information || ''
+        personality: config?.personality || '',
+        rules: config?.rules || '',
+        information: config?.information || ''
       }
     });
   } catch (error) {
@@ -531,6 +606,7 @@ router.get('/guilds', requireAuth(), async (req: Request, res: Response) => {
 // ============================================================================
 
 // Update agent stats (called by Go service when messages are sent/received)
+// Now requires guildId to update the correct server configuration
 router.post('/stats', async (req: Request, res: Response) => {
   try {
     const apiKey = req.headers['x-api-key'];
@@ -540,29 +616,45 @@ router.post('/stats', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const { userId, event } = req.body;
+    const { userId, event, guildId } = req.body;
 
     if (!userId || !event) {
       return res.status(400).json({ error: 'userId and event are required' });
+    }
+
+    if (!guildId) {
+      return res.status(400).json({ error: 'guildId is required' });
     }
 
     if (!['message_sent', 'message_received'].includes(event)) {
       return res.status(400).json({ error: 'Invalid event type' });
     }
 
+    // Find the UserServerConfig for this user and guild
+    const config = await prisma.userServerConfig.findFirst({
+      where: {
+        userId,
+        server: { guildId }
+      }
+    });
+
+    if (!config) {
+      return res.json({ success: true, message: 'Server config not found' });
+    }
+
     const now = new Date();
 
     if (event === 'message_sent') {
-      await prisma.user.update({
-        where: { id: userId },
+      await prisma.userServerConfig.update({
+        where: { id: config.id },
         data: {
           lastMessageSentAt: now,
           messagesSentCount: { increment: 1 }
         }
       });
     } else if (event === 'message_received') {
-      await prisma.user.update({
-        where: { id: userId },
+      await prisma.userServerConfig.update({
+        where: { id: config.id },
         data: {
           lastMessageReceivedAt: now,
           messagesReceivedCount: { increment: 1 }
@@ -572,9 +664,9 @@ router.post('/stats', async (req: Request, res: Response) => {
 
     res.json({ success: true });
   } catch (error: any) {
-    // User not found is ok - might be deleted
+    // Record not found is ok - might be deleted
     if (error.code === 'P2025') {
-      return res.json({ success: true, message: 'User not found' });
+      return res.json({ success: true, message: 'Config not found' });
     }
     console.error('Stats update error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -582,6 +674,7 @@ router.post('/stats', async (req: Request, res: Response) => {
 });
 
 // Get all Discord tokens (internal endpoint for discord-user-client service)
+// Returns tokens grouped with all server configurations per token
 router.get('/tokens', async (req: Request, res: Response) => {
   try {
     // Simple API key authentication for internal service
@@ -592,8 +685,7 @@ router.get('/tokens', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // Get all users with Discord tokens, including their server websites
-    // The Go service will check discordBotActive to decide whether to respond to messages
+    // Get all users with Discord tokens, including their server configurations
     const users = await prisma.user.findMany({
       where: {
         discordToken: {
@@ -602,21 +694,18 @@ router.get('/tokens', async (req: Request, res: Response) => {
       },
       select: {
         id: true,
-        email: true,
         discordToken: true,
-        discordBotActive: true,
-        selectedGuildId: true,
-        selectedGuildName: true,
-        personality: true,
-        rules: true,
-        information: true,
-        server: {
+        serverConfigs: {
           include: {
-            websites: {
+            server: {
               include: {
-                scrapes: {
-                  orderBy: { scrapedAt: 'desc' },
-                  take: 1
+                websites: {
+                  include: {
+                    scrapes: {
+                      orderBy: { scrapedAt: 'desc' },
+                      take: 1
+                    }
+                  }
                 }
               }
             }
@@ -625,24 +714,27 @@ router.get('/tokens', async (req: Request, res: Response) => {
       }
     });
 
+    // Group by token with multiple servers per token
     res.json({
       success: true,
       tokens: users.map(user => ({
-        userId: user.id,
-        userEmail: user.email,
         discordToken: user.discordToken,
-        discordBotActive: user.discordBotActive,
-        selectedGuildId: user.selectedGuildId,
-        selectedGuildName: user.selectedGuildName,
-        personality: user.personality || '',
-        rules: user.rules || '',
-        information: user.information || '',
-        websites: user.server?.websites.map(w => ({
-          url: w.url,
-          name: w.name || '',
-          markdown: w.scrapes[0]?.markdownContent || '',
-          scrapedAt: w.scrapes[0]?.scrapedAt?.toISOString() || ''
-        })) || []
+        userId: user.id,
+        servers: user.serverConfigs.map(config => ({
+          guildId: config.server.guildId,
+          guildName: config.server.guildName,
+          botActive: config.botActive,
+          botName: config.botName,
+          personality: config.personality || '',
+          rules: config.rules || '',
+          information: config.information || '',
+          websites: config.server.websites.map(w => ({
+            url: w.url,
+            name: w.name || '',
+            markdown: w.scrapes[0]?.markdownContent || '',
+            scrapedAt: w.scrapes[0]?.scrapedAt?.toISOString() || ''
+          }))
+        }))
       }))
     });
   } catch (error) {
