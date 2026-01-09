@@ -125,8 +125,8 @@ model ChatConversationGroup {
   id            String             @id @default(uuid())
   userId        String             @map("user_id")
   user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  serverId      String?            @map("server_id")
-  server        Server?            @relation(fields: [serverId], references: [id], onDelete: SetNull)
+  serverId      String             @map("server_id")
+  server        Server             @relation(fields: [serverId], references: [id], onDelete: Cascade)
   title         String             @default("New chat")
   paneCount     Int                @map("pane_count") // 1, 3, or 5
   conversations ChatConversation[]

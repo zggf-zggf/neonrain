@@ -3,7 +3,7 @@
 import { useAuth, useUser } from "@clerk/nextjs";
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { getDiscordStatus, setDiscordBotStatus } from "@/lib/api";
+import { getDiscordStatus, setDiscordBotStatus, getServerConfigs, ServerConfig } from "@/lib/api";
 import { ChatPane, ChatPaneRef } from "@/components/ChatPane";
 
 interface Persona {
@@ -28,6 +28,8 @@ interface Group {
   id: string;
   title: string;
   paneCount: number;
+  serverId: string;
+  serverName: string;
   createdAt: string;
   updatedAt: string;
   conversations: ConversationInfo[];
@@ -37,6 +39,8 @@ interface GroupListItem {
   id: string;
   title: string;
   paneCount: number;
+  serverId: string;
+  serverName: string;
   updatedAt: string;
 }
 
@@ -53,12 +57,16 @@ export default function ChatPage() {
   const [discordBotActive, setDiscordBotActive] = useState(false);
   const [activatingBot, setActivatingBot] = useState(false);
 
+  // Server state
+  const [servers, setServers] = useState<ServerConfig[]>([]);
+  const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
+
   // Group state
   const [groups, setGroups] = useState<GroupListItem[]>([]);
   const [activeGroup, setActiveGroup] = useState<Group | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [creatingGroup, setCreatingGroup] = useState(false);
-  const [showPaneSelector, setShowPaneSelector] = useState(false);
+  const [showNewChatModal, setShowNewChatModal] = useState(false);
 
   // User names for chat display
   const [botName, setBotName] = useState<string>("Assistant");
@@ -123,9 +131,9 @@ export default function ChatPage() {
   }, []);
 
   // Create new group
-  const createGroup = async (paneCount: number) => {
+  const createGroup = async (paneCount: number, serverId: string) => {
     setCreatingGroup(true);
-    setShowPaneSelector(false);
+    setShowNewChatModal(false);
     try {
       // Get fresh token
       const freshToken = await getToken();
@@ -136,7 +144,7 @@ export default function ChatPage() {
       setToken(freshToken);
 
       const url = `${BACKEND_URL}/api/chat/groups`;
-      console.log("[Chat] Creating group at:", url, "paneCount:", paneCount);
+      console.log("[Chat] Creating group at:", url, "paneCount:", paneCount, "serverId:", serverId);
 
       const response = await fetch(url, {
         method: "POST",
@@ -144,7 +152,7 @@ export default function ChatPage() {
           Authorization: `Bearer ${freshToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ paneCount }),
+        body: JSON.stringify({ paneCount, serverId }),
       });
 
       if (response.ok) {
@@ -155,11 +163,14 @@ export default function ChatPage() {
       } else {
         const errorText = await response.text();
         console.error("[Chat] Failed to create group:", response.status, errorText);
+        setError("Failed to create chat. Please try again.");
       }
     } catch (err) {
       console.error("[Chat] Failed to create group:", err);
+      setError("Failed to create chat. Please try again.");
     } finally {
       setCreatingGroup(false);
+      setSelectedServerId(null);
     }
   };
 
@@ -265,6 +276,14 @@ export default function ChatPage() {
         // Ignore
       }
 
+      // Load servers
+      try {
+        const serverData = await getServerConfigs(authToken);
+        setServers(serverData.servers || []);
+      } catch {
+        // Ignore - will show no servers available
+      }
+
       // Load personas and groups
       await loadPersonas(authToken);
       const groupList = await loadGroups(authToken);
@@ -328,7 +347,7 @@ export default function ChatPage() {
         {/* Sidebar Header */}
         <div className="p-3 border-b border-gray-800">
           <button
-            onClick={() => setShowPaneSelector(true)}
+            onClick={() => setShowNewChatModal(true)}
             disabled={creatingGroup}
             className="w-full px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition flex items-center justify-center gap-2 disabled:opacity-50"
           >
@@ -358,8 +377,8 @@ export default function ChatPage() {
                     </span>
                   )}
                 </div>
-                <div className="text-xs text-gray-500">
-                  {new Date(group.updatedAt).toLocaleDateString()}
+                <div className="text-xs text-gray-500 truncate">
+                  {group.serverName} · {new Date(group.updatedAt).toLocaleDateString()}
                 </div>
               </div>
               <button
@@ -375,24 +394,73 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Pane Count Selector Modal */}
-      {showPaneSelector && (
+      {/* New Chat Modal - Server & Pane Selection */}
+      {showNewChatModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-gray-900 rounded-xl p-6 max-w-sm w-full mx-4">
-            <h3 className="text-lg font-medium text-white mb-4">How many conversation panes?</h3>
-            <div className="flex gap-3">
-              {[1, 3, 5].map((count) => (
+          <div className="bg-gray-900 rounded-xl p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-medium text-white mb-4">New Chat</h3>
+
+            {servers.length === 0 ? (
+              <div className="text-center py-4">
+                <p className="text-gray-400 mb-4">No servers configured. Please add a server first.</p>
                 <button
-                  key={count}
-                  onClick={() => createGroup(count)}
-                  className="flex-1 py-4 bg-gray-800 hover:bg-gray-700 rounded-lg text-white font-medium transition"
+                  onClick={() => router.push("/dashboard")}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition"
                 >
-                  {count}
+                  Go to Dashboard
                 </button>
-              ))}
-            </div>
+              </div>
+            ) : (
+              <>
+                {/* Server Selection */}
+                <div className="mb-4">
+                  <label className="block text-sm text-gray-400 mb-2">Select Server</label>
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {servers.map((server) => (
+                      <button
+                        key={server.serverId}
+                        onClick={() => setSelectedServerId(server.serverId)}
+                        className={`w-full px-4 py-3 rounded-lg text-left flex items-center gap-3 transition ${
+                          selectedServerId === server.serverId
+                            ? "bg-indigo-600 text-white"
+                            : "bg-gray-800 text-gray-200 hover:bg-gray-700"
+                        }`}
+                      >
+                        <div className="w-8 h-8 bg-indigo-500 rounded-full flex items-center justify-center text-white font-bold text-sm">
+                          {server.guildName.charAt(0).toUpperCase()}
+                        </div>
+                        <span className="truncate">{server.guildName}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Pane Count Selection */}
+                {selectedServerId && (
+                  <div className="mb-4">
+                    <label className="block text-sm text-gray-400 mb-2">Number of Panes</label>
+                    <div className="flex gap-3">
+                      {[1, 3, 5].map((count) => (
+                        <button
+                          key={count}
+                          onClick={() => createGroup(count, selectedServerId)}
+                          disabled={creatingGroup}
+                          className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 rounded-lg text-white font-medium transition disabled:opacity-50"
+                        >
+                          {count} {count === 1 ? "pane" : "panes"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
             <button
-              onClick={() => setShowPaneSelector(false)}
+              onClick={() => {
+                setShowNewChatModal(false);
+                setSelectedServerId(null);
+              }}
               className="w-full mt-4 py-2 text-gray-400 hover:text-white transition"
             >
               Cancel
@@ -425,7 +493,11 @@ export default function ChatPage() {
                     )}
                   </p>
                   <p className="text-indigo-300 text-sm">
-                    {discordBotActive ? "Discord Bot Active" : "Configure your AI assistant"}
+                    {activeGroup ? (
+                      <span>Server: {activeGroup.serverName}</span>
+                    ) : (
+                      "Select or create a chat"
+                    )}
                   </p>
                 </div>
               </div>
@@ -514,10 +586,10 @@ export default function ChatPage() {
               </div>
               <h3 className="text-xl font-semibold text-white mb-2">Start a New Chat</h3>
               <p className="text-gray-400 mb-6">
-                Create a new chat with 1, 3, or 5 conversation panes.
+                Select a server and create a chat with 1, 3, or 5 conversation panes.
               </p>
               <button
-                onClick={() => setShowPaneSelector(true)}
+                onClick={() => setShowNewChatModal(true)}
                 className="px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition"
               >
                 New Chat

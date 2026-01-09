@@ -78,11 +78,60 @@ export class ChatManager {
         return;
       }
 
-      // Get first server config (for now, chat uses the first configured server)
-      // TODO: Support selecting specific server for chat
+      // Get or create conversation - we need to find the server from the conversation's group
+      let conversation;
+
+      if (!requestedConversationId) {
+        socket.emit('chat:error', {
+          message: 'Conversation ID is required. Please select or create a chat first.',
+          code: 'NO_CONVERSATION',
+        });
+        socket.disconnect();
+        return;
+      }
+
+      // Validate the conversation belongs to this user and get server info via group
+      conversation = await prisma.chatConversation.findFirst({
+        where: {
+          id: requestedConversationId,
+          userId: user.id,
+        },
+        include: {
+          group: {
+            include: {
+              server: true,
+            },
+          },
+          messages: {
+            orderBy: { createdAt: 'asc' },
+            take: 50,
+          },
+        },
+      });
+
+      if (!conversation) {
+        socket.emit('chat:error', { message: 'Conversation not found' });
+        socket.disconnect();
+        return;
+      }
+
+      if (!conversation.group) {
+        socket.emit('chat:error', {
+          message: 'Conversation is not associated with a chat group. Please create a new chat.',
+          code: 'NO_GROUP',
+        });
+        socket.disconnect();
+        return;
+      }
+
+      const serverId = conversation.group.serverId as string; // serverId is now required
+
+      // Get the user's server config for this server
       const serverConfig = await prisma.userServerConfig.findFirst({
-        where: { userId: user.id },
-        orderBy: { updatedAt: 'desc' },
+        where: {
+          userId: user.id,
+          serverId: serverId,
+        },
         include: {
           server: {
             include: {
@@ -101,59 +150,11 @@ export class ChatManager {
 
       if (!serverConfig) {
         socket.emit('chat:error', {
-          message: 'No server configured. Please configure a server first.',
-          code: 'NO_SERVER',
+          message: 'Server configuration not found. The server may have been removed.',
+          code: 'NO_SERVER_CONFIG',
         });
         socket.disconnect();
         return;
-      }
-
-      // Get or create conversation
-      let conversation;
-
-      if (requestedConversationId) {
-        // Validate the conversation belongs to this user
-        conversation = await prisma.chatConversation.findFirst({
-          where: {
-            id: requestedConversationId,
-            userId: user.id,
-          },
-          include: {
-            messages: {
-              orderBy: { createdAt: 'asc' },
-              take: 50,
-            },
-          },
-        });
-
-        if (!conversation) {
-          socket.emit('chat:error', { message: 'Conversation not found' });
-          socket.disconnect();
-          return;
-        }
-      } else {
-        // No conversation specified - get most recent or create new
-        conversation = await prisma.chatConversation.findFirst({
-          where: { userId: user.id },
-          orderBy: { updatedAt: 'desc' },
-          include: {
-            messages: {
-              orderBy: { createdAt: 'asc' },
-              take: 50,
-            },
-          },
-        });
-
-        if (!conversation) {
-          conversation = await prisma.chatConversation.create({
-            data: { userId: user.id, title: 'New conversation' },
-            include: {
-              messages: {
-                orderBy: { createdAt: 'asc' },
-              },
-            },
-          });
-        }
       }
 
       // Build websites data from server config

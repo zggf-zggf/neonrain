@@ -156,6 +156,7 @@ router.get('/groups', requireAuth(), async (req: Request, res: Response) => {
       where: { userId: user.id },
       orderBy: { updatedAt: 'desc' },
       include: {
+        server: true,
         conversations: {
           select: {
             id: true,
@@ -173,6 +174,8 @@ router.get('/groups', requireAuth(), async (req: Request, res: Response) => {
         id: g.id,
         title: g.title,
         paneCount: g.paneCount,
+        serverId: g.serverId,
+        serverName: g.server.guildName,
         createdAt: g.createdAt,
         updatedAt: g.updatedAt,
         conversations: g.conversations.map((c) => ({
@@ -197,22 +200,33 @@ router.post('/groups', requireAuth(), async (req: Request, res: Response) => {
     }
 
     const user = await getOrCreateUser(auth.userId);
-    const { paneCount } = req.body;
+    const { paneCount, serverId } = req.body;
 
     // Validate paneCount
     if (![1, 3, 5].includes(paneCount)) {
       return res.status(400).json({ error: 'paneCount must be 1, 3, or 5' });
     }
 
-    // Check if user has at least one server configured
-    const serverConfigCount = await prisma.userServerConfig.count({
-      where: { userId: user.id }
+    // Validate serverId
+    if (!serverId || typeof serverId !== 'string') {
+      return res.status(400).json({ error: 'serverId is required' });
+    }
+
+    // Verify the server config belongs to this user
+    const serverConfig = await prisma.userServerConfig.findFirst({
+      where: {
+        userId: user.id,
+        serverId: serverId,
+      },
+      include: {
+        server: true,
+      },
     });
 
-    if (serverConfigCount === 0) {
+    if (!serverConfig) {
       return res.status(400).json({
-        error: 'No server configured',
-        code: 'NO_SERVER_CONFIGURED',
+        error: 'Server not found or not configured',
+        code: 'INVALID_SERVER',
       });
     }
 
@@ -221,6 +235,7 @@ router.post('/groups', requireAuth(), async (req: Request, res: Response) => {
       const newGroup = await tx.chatConversationGroup.create({
         data: {
           userId: user.id,
+          serverId: serverId,
           title: 'New chat',
           paneCount,
         },
@@ -242,10 +257,10 @@ router.post('/groups', requireAuth(), async (req: Request, res: Response) => {
       }
       const conversations = await Promise.all(conversationPromises);
 
-      return { ...newGroup, conversations };
+      return { ...newGroup, conversations, server: serverConfig.server };
     });
 
-    console.log(`[Chat] User ${user.id} created group ${group.id} with ${paneCount} panes`);
+    console.log(`[Chat] User ${user.id} created group ${group.id} with ${paneCount} panes for server ${serverConfig.server.guildName}`);
 
     res.json({
       success: true,
@@ -253,6 +268,8 @@ router.post('/groups', requireAuth(), async (req: Request, res: Response) => {
         id: group.id,
         title: group.title,
         paneCount: group.paneCount,
+        serverId: group.serverId,
+        serverName: group.server.guildName,
         createdAt: group.createdAt,
         updatedAt: group.updatedAt,
         conversations: group.conversations.map((c) => ({
@@ -285,6 +302,7 @@ router.get('/groups/:id', requireAuth(), async (req: Request, res: Response) => 
         userId: user.id,
       },
       include: {
+        server: true,
         conversations: {
           orderBy: { paneIndex: 'asc' },
           include: {
@@ -307,6 +325,8 @@ router.get('/groups/:id', requireAuth(), async (req: Request, res: Response) => 
         id: group.id,
         title: group.title,
         paneCount: group.paneCount,
+        serverId: group.serverId,
+        serverName: group.server.guildName,
         createdAt: group.createdAt,
         updatedAt: group.updatedAt,
         conversations: group.conversations.map((c) => ({
